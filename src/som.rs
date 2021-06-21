@@ -159,6 +159,58 @@ impl<'a> SOMSerializer<'a> {
         Ok(())
     }
 
+    fn write_u64(&mut self, value: u64, endian: SOMEndian) -> Result<(), SOMError> {
+        let size = std::mem::size_of::<u64>();
+        self.check_size(size)?;
+
+        match endian {
+            SOMEndian::Big => BigEndian::write_u64(&mut self.buffer[self.offset..], value),
+            SOMEndian::Little => LittleEndian::write_u64(&mut self.buffer[self.offset..], value),
+        }
+
+        self.offset += size;
+        Ok(())
+    }
+
+    fn write_i64(&mut self, value: i64, endian: SOMEndian) -> Result<(), SOMError> {
+        let size = std::mem::size_of::<i64>();
+        self.check_size(size)?;
+
+        match endian {
+            SOMEndian::Big => BigEndian::write_i64(&mut self.buffer[self.offset..], value),
+            SOMEndian::Little => LittleEndian::write_i64(&mut self.buffer[self.offset..], value),
+        }
+
+        self.offset += size;
+        Ok(())
+    }
+
+    fn write_f32(&mut self, value: f32, endian: SOMEndian) -> Result<(), SOMError> {
+        let size = std::mem::size_of::<f32>();
+        self.check_size(size)?;
+
+        match endian {
+            SOMEndian::Big => BigEndian::write_f32(&mut self.buffer[self.offset..], value),
+            SOMEndian::Little => LittleEndian::write_f32(&mut self.buffer[self.offset..], value),
+        }
+
+        self.offset += size;
+        Ok(())
+    }
+
+    fn write_f64(&mut self, value: f64, endian: SOMEndian) -> Result<(), SOMError> {
+        let size = std::mem::size_of::<f64>();
+        self.check_size(size)?;
+
+        match endian {
+            SOMEndian::Big => BigEndian::write_f64(&mut self.buffer[self.offset..], value),
+            SOMEndian::Little => LittleEndian::write_f64(&mut self.buffer[self.offset..], value),
+        }
+
+        self.offset += size;
+        Ok(())
+    }
+
     fn check_size(&self, size: usize) -> Result<(), SOMError> {
         if self.buffer.len() < (self.offset + size) {
             return Err(SOMError::BufferExhausted(format!(
@@ -297,6 +349,58 @@ impl<'a> SOMParser<'a> {
         let result = match endian {
             SOMEndian::Big => BigEndian::read_i32(&self.buffer[self.offset..]),
             SOMEndian::Little => LittleEndian::read_i32(&self.buffer[self.offset..]),
+        };
+
+        self.offset += size;
+        Ok(result)
+    }
+
+    fn read_u64(&mut self, endian: SOMEndian) -> Result<u64, SOMError> {
+        let size = std::mem::size_of::<u64>();
+        self.check_size(size)?;
+
+        let result = match endian {
+            SOMEndian::Big => BigEndian::read_u64(&self.buffer[self.offset..]),
+            SOMEndian::Little => LittleEndian::read_u64(&self.buffer[self.offset..]),
+        };
+
+        self.offset += size;
+        Ok(result)
+    }
+
+    fn read_i64(&mut self, endian: SOMEndian) -> Result<i64, SOMError> {
+        let size = std::mem::size_of::<i64>();
+        self.check_size(size)?;
+
+        let result = match endian {
+            SOMEndian::Big => BigEndian::read_i64(&self.buffer[self.offset..]),
+            SOMEndian::Little => LittleEndian::read_i64(&self.buffer[self.offset..]),
+        };
+
+        self.offset += size;
+        Ok(result)
+    }
+
+    fn read_f32(&mut self, endian: SOMEndian) -> Result<f32, SOMError> {
+        let size = std::mem::size_of::<f32>();
+        self.check_size(size)?;
+
+        let result = match endian {
+            SOMEndian::Big => BigEndian::read_f32(&self.buffer[self.offset..]),
+            SOMEndian::Little => LittleEndian::read_f32(&self.buffer[self.offset..]),
+        };
+
+        self.offset += size;
+        Ok(result)
+    }
+
+    fn read_f64(&mut self, endian: SOMEndian) -> Result<f64, SOMError> {
+        let size = std::mem::size_of::<f64>();
+        self.check_size(size)?;
+
+        let result = match endian {
+            SOMEndian::Big => BigEndian::read_f64(&self.buffer[self.offset..]),
+            SOMEndian::Little => LittleEndian::read_f64(&self.buffer[self.offset..]),
         };
 
         self.offset += size;
@@ -621,6 +725,126 @@ impl SOMType for SOMPrimitive<i32> {
     }
 }
 
+impl SOMType for SOMPrimitive<u64> {
+    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+        let offset = serializer.offset();
+
+        match self.value {
+            Some(value) => serializer.write_u64(value, self.endian())?,
+            None => {
+                return Err(SOMError::UninitializedType(format!(
+                    "Uninitialized Type at offset: {}",
+                    offset
+                )))
+            }
+        }
+
+        Ok(serializer.offset() - offset)
+    }
+
+    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+        let offset = parser.offset();
+
+        self.value = Some(parser.read_u64(self.endian())?);
+
+        Ok(parser.offset() - offset)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<u64>()
+    }
+}
+
+impl SOMType for SOMPrimitive<i64> {
+    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+        let offset = serializer.offset();
+
+        match self.value {
+            Some(value) => serializer.write_i64(value, self.endian())?,
+            None => {
+                return Err(SOMError::UninitializedType(format!(
+                    "Uninitialized Type at offset: {}",
+                    offset
+                )))
+            }
+        }
+
+        Ok(serializer.offset() - offset)
+    }
+
+    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+        let offset = parser.offset();
+
+        self.value = Some(parser.read_i64(self.endian())?);
+
+        Ok(parser.offset() - offset)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<i64>()
+    }
+}
+
+impl SOMType for SOMPrimitive<f32> {
+    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+        let offset = serializer.offset();
+
+        match self.value {
+            Some(value) => serializer.write_f32(value, self.endian())?,
+            None => {
+                return Err(SOMError::UninitializedType(format!(
+                    "Uninitialized Type at offset: {}",
+                    offset
+                )))
+            }
+        }
+
+        Ok(serializer.offset() - offset)
+    }
+
+    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+        let offset = parser.offset();
+
+        self.value = Some(parser.read_f32(self.endian())?);
+
+        Ok(parser.offset() - offset)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<f32>()
+    }
+}
+
+impl SOMType for SOMPrimitive<f64> {
+    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+        let offset = serializer.offset();
+
+        match self.value {
+            Some(value) => serializer.write_f64(value, self.endian())?,
+            None => {
+                return Err(SOMError::UninitializedType(format!(
+                    "Uninitialized Type at offset: {}",
+                    offset
+                )))
+            }
+        }
+
+        Ok(serializer.offset() - offset)
+    }
+
+    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+        let offset = parser.offset();
+
+        self.value = Some(parser.read_f64(self.endian())?);
+
+        Ok(parser.offset() - offset)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<f64>()
+    }
+}
+
 pub enum SOMTypeWrapper {
     Bool(SOMPrimitive<bool>),
     U8(SOMPrimitive<u8>),
@@ -631,6 +855,10 @@ pub enum SOMTypeWrapper {
     I24(SOMPrimitive<i24>),
     U32(SOMPrimitive<u32>),
     I32(SOMPrimitive<i32>),
+    U64(SOMPrimitive<u64>),
+    I64(SOMPrimitive<i64>),
+    F32(SOMPrimitive<f32>),
+    F64(SOMPrimitive<f64>),
     Struct(SOMStruct<SOMTypeWrapper>),
 }
 
@@ -646,6 +874,10 @@ impl SOMType for SOMTypeWrapper {
             SOMTypeWrapper::I24(obj) => obj.serialize(serializer),
             SOMTypeWrapper::U32(obj) => obj.serialize(serializer),
             SOMTypeWrapper::I32(obj) => obj.serialize(serializer),
+            SOMTypeWrapper::U64(obj) => obj.serialize(serializer),
+            SOMTypeWrapper::I64(obj) => obj.serialize(serializer),
+            SOMTypeWrapper::F32(obj) => obj.serialize(serializer),
+            SOMTypeWrapper::F64(obj) => obj.serialize(serializer),
             SOMTypeWrapper::Struct(obj) => obj.serialize(serializer),
         }
     }
@@ -661,6 +893,10 @@ impl SOMType for SOMTypeWrapper {
             SOMTypeWrapper::I24(obj) => obj.parse(parser),
             SOMTypeWrapper::U32(obj) => obj.parse(parser),
             SOMTypeWrapper::I32(obj) => obj.parse(parser),
+            SOMTypeWrapper::U64(obj) => obj.parse(parser),
+            SOMTypeWrapper::I64(obj) => obj.parse(parser),
+            SOMTypeWrapper::F32(obj) => obj.parse(parser),
+            SOMTypeWrapper::F64(obj) => obj.parse(parser),
             SOMTypeWrapper::Struct(obj) => obj.parse(parser),
         }
     }
@@ -676,6 +912,10 @@ impl SOMType for SOMTypeWrapper {
             SOMTypeWrapper::I24(obj) => obj.size(),
             SOMTypeWrapper::U32(obj) => obj.size(),
             SOMTypeWrapper::I32(obj) => obj.size(),
+            SOMTypeWrapper::U64(obj) => obj.size(),
+            SOMTypeWrapper::I64(obj) => obj.size(),
+            SOMTypeWrapper::F32(obj) => obj.size(),
+            SOMTypeWrapper::F64(obj) => obj.size(),
             SOMTypeWrapper::Struct(obj) => obj.size(),
         }
     }
@@ -958,12 +1198,12 @@ mod tests {
                 SOMPrimitive::new(SOMEndian::Big, u24::new(12513060u32));
             serialize_fail(
                 &obj,
-                &mut [0u8; 1],
+                &mut [0u8; 2],
                 "Serializer exausted at offset: 0 for Object size: 3",
             );
             parse_fail(
                 &mut obj,
-                &[0u8; 1],
+                &[0u8; 2],
                 "Parser exausted at offset: 0 for Object size: 3",
             );
 
@@ -988,12 +1228,12 @@ mod tests {
                 SOMPrimitive::new(SOMEndian::Big, i24::new(-2513060i32));
             serialize_fail(
                 &obj,
-                &mut [0u8; 1],
+                &mut [0u8; 2],
                 "Serializer exausted at offset: 0 for Object size: 3",
             );
             parse_fail(
                 &mut obj,
-                &[0u8; 1],
+                &[0u8; 2],
                 "Parser exausted at offset: 0 for Object size: 3",
             );
 
@@ -1016,12 +1256,12 @@ mod tests {
             let mut obj: SOMPrimitive<u32> = SOMPrimitive::new(SOMEndian::Big, 3405691582u32);
             serialize_fail(
                 &obj,
-                &mut [0u8; 1],
+                &mut [0u8; 3],
                 "Serializer exausted at offset: 0 for Object size: 4",
             );
             parse_fail(
                 &mut obj,
-                &[0u8; 1],
+                &[0u8; 3],
                 "Parser exausted at offset: 0 for Object size: 4",
             );
 
@@ -1044,16 +1284,158 @@ mod tests {
             let mut obj: SOMPrimitive<i32> = SOMPrimitive::new(SOMEndian::Big, -405691582i32);
             serialize_fail(
                 &obj,
-                &mut [0u8; 1],
+                &mut [0u8; 3],
                 "Serializer exausted at offset: 0 for Object size: 4",
             );
             parse_fail(
                 &mut obj,
-                &[0u8; 1],
+                &[0u8; 3],
                 "Parser exausted at offset: 0 for Object size: 4",
             );
 
             let obj: SOMPrimitive<i32> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+        }
+
+        // u64
+        {
+            let obj1: SOMPrimitive<u64> =
+                SOMPrimitive::new(SOMEndian::Big, 16045704242864831166u64);
+            let mut obj2: SOMPrimitive<u64> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0xDE, 0xAD, 0xCA, 0xFE, 0xBE, 0xEF, 0xBA, 0xBE],
+            );
+            assert_eq!(16045704242864831166u64, obj2.get().unwrap());
+
+            let obj1: SOMPrimitive<u64> =
+                SOMPrimitive::new(SOMEndian::Little, 16045704242864831166u64);
+            let mut obj2: SOMPrimitive<u64> = SOMPrimitive::empty(SOMEndian::Little);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0xBE, 0xBA, 0xEF, 0xBE, 0xFE, 0xCA, 0xAD, 0xDE],
+            );
+            assert_eq!(16045704242864831166u64, obj2.get().unwrap());
+
+            let mut obj: SOMPrimitive<u64> =
+                SOMPrimitive::new(SOMEndian::Big, 16045704242864831166u64);
+            serialize_fail(
+                &obj,
+                &mut [0u8; 7],
+                "Serializer exausted at offset: 0 for Object size: 8",
+            );
+            parse_fail(
+                &mut obj,
+                &[0u8; 7],
+                "Parser exausted at offset: 0 for Object size: 8",
+            );
+
+            let obj: SOMPrimitive<u64> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+        }
+
+        // i64
+        {
+            let obj1: SOMPrimitive<i64> =
+                SOMPrimitive::new(SOMEndian::Big, -6045704242864831166i64);
+            let mut obj2: SOMPrimitive<i64> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0xAC, 0x19, 0x58, 0x05, 0xCA, 0xF8, 0x45, 0x42],
+            );
+            assert_eq!(-6045704242864831166i64, obj2.get().unwrap());
+
+            let obj1: SOMPrimitive<i64> =
+                SOMPrimitive::new(SOMEndian::Little, -6045704242864831166i64);
+            let mut obj2: SOMPrimitive<i64> = SOMPrimitive::empty(SOMEndian::Little);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0x42, 0x45, 0xF8, 0xCA, 0x05, 0x58, 0x19, 0xAC],
+            );
+            assert_eq!(-6045704242864831166i64, obj2.get().unwrap());
+
+            let mut obj: SOMPrimitive<i64> =
+                SOMPrimitive::new(SOMEndian::Big, -6045704242864831166i64);
+            serialize_fail(
+                &obj,
+                &mut [0u8; 7],
+                "Serializer exausted at offset: 0 for Object size: 8",
+            );
+            parse_fail(
+                &mut obj,
+                &[0u8; 7],
+                "Parser exausted at offset: 0 for Object size: 8",
+            );
+
+            let obj: SOMPrimitive<i64> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+        }
+
+        // f32
+        {
+            let obj1: SOMPrimitive<f32> = SOMPrimitive::new(SOMEndian::Big, 1.0f32);
+            let mut obj2: SOMPrimitive<f32> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_parse(&obj1, &mut obj2, &[0x3F, 0x80, 0x00, 0x00]);
+            assert_eq!(1.0f32, obj2.get().unwrap());
+
+            let obj1: SOMPrimitive<f32> = SOMPrimitive::new(SOMEndian::Little, 1.0f32);
+            let mut obj2: SOMPrimitive<f32> = SOMPrimitive::empty(SOMEndian::Little);
+            serialize_parse(&obj1, &mut obj2, &[0x00, 0x00, 0x80, 0x3F]);
+            assert_eq!(1.0f32, obj2.get().unwrap());
+
+            let mut obj: SOMPrimitive<f32> = SOMPrimitive::new(SOMEndian::Big, 1.0f32);
+            serialize_fail(
+                &obj,
+                &mut [0u8; 3],
+                "Serializer exausted at offset: 0 for Object size: 4",
+            );
+            parse_fail(
+                &mut obj,
+                &[0u8; 3],
+                "Parser exausted at offset: 0 for Object size: 4",
+            );
+
+            let obj: SOMPrimitive<f32> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+        }
+
+        // f64
+        {
+            let obj1: SOMPrimitive<f64> = SOMPrimitive::new(SOMEndian::Big, 1.0f64);
+            let mut obj2: SOMPrimitive<f64> = SOMPrimitive::empty(SOMEndian::Big);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0x3F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            );
+            assert_eq!(1.0f64, obj2.get().unwrap());
+
+            let obj1: SOMPrimitive<f64> = SOMPrimitive::new(SOMEndian::Little, 1.0f64);
+            let mut obj2: SOMPrimitive<f64> = SOMPrimitive::empty(SOMEndian::Little);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x3F],
+            );
+            assert_eq!(1.0f64, obj2.get().unwrap());
+
+            let mut obj: SOMPrimitive<f64> = SOMPrimitive::new(SOMEndian::Big, 1.0f64);
+            serialize_fail(
+                &obj,
+                &mut [0u8; 7],
+                "Serializer exausted at offset: 0 for Object size: 8",
+            );
+            parse_fail(
+                &mut obj,
+                &[0u8; 7],
+                "Parser exausted at offset: 0 for Object size: 8",
+            );
+
+            let obj: SOMPrimitive<f64> = SOMPrimitive::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
     }
