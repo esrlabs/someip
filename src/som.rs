@@ -1,12 +1,20 @@
 // wip: someip types
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use std::any::Any;
 use ux::{i24, u24};
 
 pub trait SOMType {
     fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError>;
     fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError>;
     fn size(&self) -> usize;
+}
+
+#[derive(Debug)]
+pub enum SOMError {
+    BufferExhausted(String),
+    InvalidPayload(String),
+    InvalidType(String),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -19,16 +27,37 @@ pub trait SOMTypeWithEndian {
     fn endian(&self) -> SOMEndian;
 }
 
-#[derive(Debug)]
-pub enum SOMError {
-    BufferExhausted(String),
-    InvalidPayload(String),
-    UninitializedType(String),
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum SOMLengthField {
+    None,
+    U8,
+    U16,
+    U32,
+}
+
+impl SOMLengthField {
+    fn size(&self) -> usize {
+        match self {
+            SOMLengthField::None => 0usize,
+            SOMLengthField::U8 => std::mem::size_of::<u8>(),
+            SOMLengthField::U16 => std::mem::size_of::<u16>(),
+            SOMLengthField::U32 => std::mem::size_of::<u32>(),
+        }
+    }
+}
+
+pub trait SOMTypeWithLengthField {
+    fn lengthfield(&self) -> SOMLengthField;
 }
 
 pub struct SOMSerializer<'a> {
     buffer: &'a mut [u8],
     offset: usize,
+}
+
+struct SOMSerializerPromise {
+    offset: usize,
+    size: usize,
 }
 
 impl<'a> SOMSerializer<'a> {
@@ -38,6 +67,44 @@ impl<'a> SOMSerializer<'a> {
 
     fn offset(&self) -> usize {
         self.offset
+    }
+
+    fn promise(&mut self, size: usize) -> Result<SOMSerializerPromise, SOMError> {
+        self.check_size(size)?;
+        let result = SOMSerializerPromise {
+            offset: self.offset,
+            size,
+        };
+        self.offset += size;
+        Ok(result)
+    }
+
+    fn write_lengthfield(
+        &mut self,
+        promise: SOMSerializerPromise,
+        lengthfield: SOMLengthField,
+        value: usize,
+    ) -> Result<(), SOMError> {
+        if promise.size != lengthfield.size() {
+            return Err(SOMError::InvalidType(format!(
+                "Invalid Length-Field size: {} at offset: {}",
+                lengthfield.size(),
+                promise.offset
+            )));
+        }
+
+        match lengthfield {
+            SOMLengthField::None => {}
+            SOMLengthField::U8 => self.buffer[promise.offset] = value as u8,
+            SOMLengthField::U16 => {
+                BigEndian::write_u16(&mut self.buffer[promise.offset..], value as u16)
+            }
+            SOMLengthField::U32 => {
+                BigEndian::write_u32(&mut self.buffer[promise.offset..], value as u32)
+            }
+        };
+
+        Ok(())
     }
 
     fn write_bool(&mut self, value: bool) -> Result<(), SOMError> {
@@ -237,6 +304,20 @@ impl<'a> SOMParser<'a> {
         self.offset
     }
 
+    fn read_lengthfield(&mut self, lengthfield: SOMLengthField) -> Result<usize, SOMError> {
+        let size = lengthfield.size();
+        self.check_size(size)?;
+
+        let result = match lengthfield {
+            SOMLengthField::None => 0usize,
+            SOMLengthField::U8 => self.read_u8()? as usize,
+            SOMLengthField::U16 => self.read_u16(SOMEndian::Big)? as usize,
+            SOMLengthField::U32 => self.read_u32(SOMEndian::Big)? as usize,
+        };
+
+        Ok(result)
+    }
+
     fn read_bool(&mut self) -> Result<bool, SOMError> {
         let size = std::mem::size_of::<bool>();
         self.check_size(size)?;
@@ -419,563 +500,729 @@ impl<'a> SOMParser<'a> {
     }
 }
 
-#[derive(Debug)]
-pub struct SOMPrimitive<T> {
-    endian: SOMEndian,
-    value: Option<T>,
-}
+mod primitives {
+    use super::*;
 
-impl<T: Copy + Clone> SOMPrimitive<T> {
-    pub fn empty(endian: SOMEndian) -> SOMPrimitive<T> {
-        SOMPrimitive {
-            endian,
-            value: None,
-        }
+    #[derive(Debug)]
+    pub struct SOMPrimitiveType<T> {
+        pub endian: SOMEndian,
+        pub value: Option<T>,
     }
 
-    pub fn new(endian: SOMEndian, value: T) -> SOMPrimitive<T> {
-        SOMPrimitive {
-            endian,
-            value: Some(value),
-        }
-    }
-
-    pub fn set(&mut self, value: T) {
-        self.value = Some(value);
-    }
-
-    pub fn get(&self) -> Option<T> {
-        self.value
-    }
-}
-
-impl<T> SOMTypeWithEndian for SOMPrimitive<T> {
-    fn endian(&self) -> SOMEndian {
-        self.endian
-    }
-}
-
-impl SOMType for SOMPrimitive<bool> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_bool(value)?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+    impl<T: Copy + Clone> SOMPrimitiveType<T> {
+        pub fn empty(endian: SOMEndian) -> SOMPrimitiveType<T> {
+            SOMPrimitiveType {
+                endian,
+                value: None,
             }
         }
 
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_bool()?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<bool>()
-    }
-}
-
-impl SOMType for SOMPrimitive<u8> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_u8(value)?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+        pub fn new(endian: SOMEndian, value: T) -> SOMPrimitiveType<T> {
+            SOMPrimitiveType {
+                endian,
+                value: Some(value),
             }
         }
 
-        Ok(serializer.offset() - offset)
+        pub fn set(&mut self, value: T) {
+            self.value = Some(value);
+        }
+
+        pub fn get(&self) -> Option<T> {
+            self.value
+        }
     }
 
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_u8()?);
-
-        Ok(parser.offset() - offset)
+    impl<T> SOMTypeWithEndian for SOMPrimitiveType<T> {
+        fn endian(&self) -> SOMEndian {
+            self.endian
+        }
     }
 
-    fn size(&self) -> usize {
-        std::mem::size_of::<u8>()
+    impl SOMType for SOMPrimitiveType<bool> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_bool(value)?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_bool()?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<bool>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<u8> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_u8(value)?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_u8()?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<u8>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<i8> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_i8(value)?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_i8()?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<i8>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<u16> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_u16(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_u16(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<u16>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<i16> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_i16(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_i16(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<i16>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<u24> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_u24(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_u24(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<u16>() + std::mem::size_of::<u8>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<i24> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_i24(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_i24(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<i16>() + std::mem::size_of::<i8>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<u32> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_u32(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_u32(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<u32>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<i32> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_i32(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_i32(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<i32>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<u64> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_u64(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_u64(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<u64>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<i64> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_i64(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_i64(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<i64>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<f32> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_f32(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_f32(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<f32>()
+        }
+    }
+
+    impl SOMType for SOMPrimitiveType<f64> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            match self.value {
+                Some(value) => serializer.write_f64(value, self.endian())?,
+                None => {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized Type at offset: {}",
+                        offset
+                    )))
+                }
+            }
+
+            Ok(serializer.offset() - offset)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            self.value = Some(parser.read_f64(self.endian())?);
+
+            Ok(parser.offset() - offset)
+        }
+
+        fn size(&self) -> usize {
+            std::mem::size_of::<f64>()
+        }
     }
 }
 
-impl SOMType for SOMPrimitive<i8> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
+pub type SOMBool = primitives::SOMPrimitiveType<bool>;
+pub type SOMu8 = primitives::SOMPrimitiveType<u8>;
+pub type SOMi8 = primitives::SOMPrimitiveType<i8>;
+pub type SOMu16 = primitives::SOMPrimitiveType<u16>;
+pub type SOMi16 = primitives::SOMPrimitiveType<i16>;
+pub type SOMu24 = primitives::SOMPrimitiveType<u24>;
+pub type SOMi24 = primitives::SOMPrimitiveType<i24>;
+pub type SOMu32 = primitives::SOMPrimitiveType<u32>;
+pub type SOMi32 = primitives::SOMPrimitiveType<i32>;
+pub type SOMu64 = primitives::SOMPrimitiveType<u64>;
+pub type SOMi64 = primitives::SOMPrimitiveType<i64>;
+pub type SOMf32 = primitives::SOMPrimitiveType<f32>;
+pub type SOMf64 = primitives::SOMPrimitiveType<f64>;
 
-        match self.value {
-            Some(value) => serializer.write_i8(value)?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+mod arrays {
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct SOMArrayType<T: SOMType + Any> {
+        lengthfield: SOMLengthField,
+        elements: Vec<T>,
+        min: usize,
+        max: usize,
+    }
+
+    impl<T: SOMType + Any> SOMArrayType<T> {
+        pub fn fixed(size: usize) -> SOMArrayType<T> {
+            SOMArrayType {
+                lengthfield: SOMLengthField::None,
+                elements: Vec::<T>::new(),
+                min: size,
+                max: size,
             }
         }
 
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_i8()?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<i8>()
-    }
-}
-
-impl SOMType for SOMPrimitive<u16> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_u16(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+        pub fn dynamic(lengthfield: SOMLengthField, min: usize, max: usize) -> SOMArrayType<T> {
+            SOMArrayType {
+                lengthfield,
+                elements: Vec::<T>::new(),
+                min,
+                max,
             }
         }
 
-        Ok(serializer.offset() - offset)
+        pub fn is_dynamic(&self) -> bool {
+            self.min != self.max
+        }
+
+        pub fn len(&self) -> usize {
+            self.elements.len()
+        }
+
+        pub fn add(&mut self, obj: T) {
+            let _obj = &obj as &dyn Any;
+            self.elements
+                .push(match _obj.downcast_ref::<SOMArrayMember>() {
+                    Some(_) => {
+                        if self.elements.is_empty()
+                            || (std::mem::discriminant(self.elements.get(0).unwrap())
+                                == std::mem::discriminant(&obj))
+                        {
+                            obj
+                        } else {
+                            return;
+                        }
+                    }
+                    None => obj,
+                });
+        }
+
+        pub fn remove(&mut self, index: usize) -> T {
+            self.elements.remove(index)
+        }
+
+        pub fn get(&self, index: usize) -> Option<&T> {
+            self.elements.get(index)
+        }
+
+        fn check_length(&self, offset: usize) -> Result<(), SOMError> {
+            let length = self.elements.len();
+            if (length < self.min) || (length > self.max) {
+                return Err(SOMError::InvalidType(format!(
+                    "Invalid Array length: {} at offset: {}",
+                    length, offset
+                )));
+            }
+
+            Ok(())
+        }
     }
 
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_u16(self.endian())?);
-
-        Ok(parser.offset() - offset)
+    impl<T: SOMType + Any> SOMTypeWithLengthField for SOMArrayType<T> {
+        fn lengthfield(&self) -> SOMLengthField {
+            self.lengthfield
+        }
     }
 
-    fn size(&self) -> usize {
-        std::mem::size_of::<u16>()
+    impl<T: SOMType + Any> SOMType for SOMArrayType<T> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+            self.check_length(offset)?;
+
+            let lengthfield_promise = serializer.promise(self.lengthfield.size())?;
+            for element in &self.elements {
+                element.serialize(serializer)?;
+            }
+
+            let size = serializer.offset() - offset;
+            if self.is_dynamic() {
+                serializer.write_lengthfield(
+                    lengthfield_promise,
+                    self.lengthfield,
+                    size - self.lengthfield.size(),
+                )?;
+            }
+
+            Ok(size)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+            self.check_length(offset)?;
+
+            let lengthfield_size = parser.read_lengthfield(self.lengthfield)?;
+            for element in &mut self.elements {
+                element.parse(parser)?;
+            }
+
+            let size = parser.offset() - offset;
+            if self.is_dynamic() && (lengthfield_size != (size - self.lengthfield.size())) {
+                return Err(SOMError::InvalidPayload(format!(
+                    "Invalid Length-Field size: {} at offset: {}",
+                    lengthfield_size, offset
+                )));
+            }
+
+            Ok(size)
+        }
+
+        fn size(&self) -> usize {
+            let mut size: usize = 0;
+
+            size += self.lengthfield.size();
+            for element in &self.elements {
+                size += element.size();
+            }
+
+            size
+        }
     }
 }
 
-impl SOMType for SOMPrimitive<i16> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
+pub type SOMArrayMember = wrapper::SOMTypeWrapper;
+pub type SOMArray = arrays::SOMArrayType<SOMArrayMember>;
 
-        match self.value {
-            Some(value) => serializer.write_i16(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+pub type SOMBoolArray = arrays::SOMArrayType<SOMBool>;
+pub type SOMu8Array = arrays::SOMArrayType<SOMu8>;
+pub type SOMi8Array = arrays::SOMArrayType<SOMi8>;
+pub type SOMu16Array = arrays::SOMArrayType<SOMu16>;
+pub type SOMi16Array = arrays::SOMArrayType<SOMi16>;
+pub type SOMu24Array = arrays::SOMArrayType<SOMu24>;
+pub type SOMi24Array = arrays::SOMArrayType<SOMi24>;
+pub type SOMu32Array = arrays::SOMArrayType<SOMu32>;
+pub type SOMi32Array = arrays::SOMArrayType<SOMi32>;
+pub type SOMu64Array = arrays::SOMArrayType<SOMu64>;
+pub type SOMi64Array = arrays::SOMArrayType<SOMi64>;
+pub type SOMf32Array = arrays::SOMArrayType<SOMf32>;
+pub type SOMf64Array = arrays::SOMArrayType<SOMf64>;
+
+mod structs {
+    use super::*;
+
+    #[derive(Debug)]
+    pub struct SOMStructType<T: SOMType> {
+        members: Vec<T>,
+    }
+
+    impl<T: SOMType> SOMStructType<T> {
+        pub fn new() -> SOMStructType<T> {
+            SOMStructType {
+                members: Vec::<T>::new(),
             }
         }
 
-        Ok(serializer.offset() - offset)
+        pub fn len(&self) -> usize {
+            self.members.len()
+        }
+
+        pub fn add(&mut self, obj: T) {
+            self.members.push(obj);
+        }
+
+        pub fn get(&self, index: usize) -> Option<&T> {
+            self.members.get(index)
+        }
     }
 
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
+    impl<T: SOMType> SOMType for SOMStructType<T> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
 
-        self.value = Some(parser.read_i16(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<i16>()
-    }
-}
-
-impl SOMType for SOMPrimitive<u24> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_u24(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+            for member in &self.members {
+                member.serialize(serializer)?;
             }
+
+            Ok(serializer.offset() - offset)
         }
 
-        Ok(serializer.offset() - offset)
-    }
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
 
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_u24(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<u16>() + std::mem::size_of::<u8>()
-    }
-}
-
-impl SOMType for SOMPrimitive<i24> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_i24(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+            for member in &mut self.members {
+                member.parse(parser)?;
             }
+
+            Ok(parser.offset() - offset)
         }
 
-        Ok(serializer.offset() - offset)
-    }
+        fn size(&self) -> usize {
+            let mut size: usize = 0;
 
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_i24(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<i16>() + std::mem::size_of::<i8>()
-    }
-}
-
-impl SOMType for SOMPrimitive<u32> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_u32(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+            for member in &self.members {
+                size += member.size();
             }
+
+            size
         }
-
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_u32(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<u32>()
     }
 }
 
-impl SOMType for SOMPrimitive<i32> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
+pub type SOMStructMember = wrapper::SOMTypeWrapper;
+pub type SOMStruct = structs::SOMStructType<SOMStructMember>;
 
-        match self.value {
-            Some(value) => serializer.write_i32(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
+mod wrapper {
+    use super::*;
+
+    macro_rules! som_type_wrapper {
+        ([$($value:tt($type:tt),)*]) => {
+            #[derive(Debug)]
+            pub enum SOMTypeWrapper {$($value($type),)*}
+
+            impl SOMType for SOMTypeWrapper {
+                fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+                    match self {
+                        $(SOMTypeWrapper::$value(obj) => obj.serialize(serializer),)*
+                    }
+                }
+
+                fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+                    match self {
+                        $(SOMTypeWrapper::$value(obj) => obj.parse(parser),)*
+                    }
+                }
+
+                fn size(&self) -> usize {
+                    match self {
+                        $(SOMTypeWrapper::$value(obj) => obj.size(),)*
+                    }
+                }
             }
-        }
-
-        Ok(serializer.offset() - offset)
+        };
     }
 
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_i32(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<i32>()
-    }
-}
-
-impl SOMType for SOMPrimitive<u64> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_u64(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
-            }
-        }
-
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_u64(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<u64>()
-    }
-}
-
-impl SOMType for SOMPrimitive<i64> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_i64(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
-            }
-        }
-
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_i64(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<i64>()
-    }
-}
-
-impl SOMType for SOMPrimitive<f32> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_f32(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
-            }
-        }
-
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_f32(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<f32>()
-    }
-}
-
-impl SOMType for SOMPrimitive<f64> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        match self.value {
-            Some(value) => serializer.write_f64(value, self.endian())?,
-            None => {
-                return Err(SOMError::UninitializedType(format!(
-                    "Uninitialized Type at offset: {}",
-                    offset
-                )))
-            }
-        }
-
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        self.value = Some(parser.read_f64(self.endian())?);
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<f64>()
-    }
-}
-
-pub enum SOMTypeWrapper {
-    Bool(SOMPrimitive<bool>),
-    U8(SOMPrimitive<u8>),
-    I8(SOMPrimitive<i8>),
-    U16(SOMPrimitive<u16>),
-    I16(SOMPrimitive<i16>),
-    U24(SOMPrimitive<u24>),
-    I24(SOMPrimitive<i24>),
-    U32(SOMPrimitive<u32>),
-    I32(SOMPrimitive<i32>),
-    U64(SOMPrimitive<u64>),
-    I64(SOMPrimitive<i64>),
-    F32(SOMPrimitive<f32>),
-    F64(SOMPrimitive<f64>),
-    Struct(SOMStruct<SOMTypeWrapper>),
-}
-
-impl SOMType for SOMTypeWrapper {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        match self {
-            SOMTypeWrapper::Bool(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::U8(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::I8(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::U16(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::I16(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::U24(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::I24(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::U32(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::I32(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::U64(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::I64(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::F32(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::F64(obj) => obj.serialize(serializer),
-            SOMTypeWrapper::Struct(obj) => obj.serialize(serializer),
-        }
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        match self {
-            SOMTypeWrapper::Bool(obj) => obj.parse(parser),
-            SOMTypeWrapper::U8(obj) => obj.parse(parser),
-            SOMTypeWrapper::I8(obj) => obj.parse(parser),
-            SOMTypeWrapper::U16(obj) => obj.parse(parser),
-            SOMTypeWrapper::I16(obj) => obj.parse(parser),
-            SOMTypeWrapper::U24(obj) => obj.parse(parser),
-            SOMTypeWrapper::I24(obj) => obj.parse(parser),
-            SOMTypeWrapper::U32(obj) => obj.parse(parser),
-            SOMTypeWrapper::I32(obj) => obj.parse(parser),
-            SOMTypeWrapper::U64(obj) => obj.parse(parser),
-            SOMTypeWrapper::I64(obj) => obj.parse(parser),
-            SOMTypeWrapper::F32(obj) => obj.parse(parser),
-            SOMTypeWrapper::F64(obj) => obj.parse(parser),
-            SOMTypeWrapper::Struct(obj) => obj.parse(parser),
-        }
-    }
-
-    fn size(&self) -> usize {
-        match self {
-            SOMTypeWrapper::Bool(obj) => obj.size(),
-            SOMTypeWrapper::U8(obj) => obj.size(),
-            SOMTypeWrapper::I8(obj) => obj.size(),
-            SOMTypeWrapper::U16(obj) => obj.size(),
-            SOMTypeWrapper::I16(obj) => obj.size(),
-            SOMTypeWrapper::U24(obj) => obj.size(),
-            SOMTypeWrapper::I24(obj) => obj.size(),
-            SOMTypeWrapper::U32(obj) => obj.size(),
-            SOMTypeWrapper::I32(obj) => obj.size(),
-            SOMTypeWrapper::U64(obj) => obj.size(),
-            SOMTypeWrapper::I64(obj) => obj.size(),
-            SOMTypeWrapper::F32(obj) => obj.size(),
-            SOMTypeWrapper::F64(obj) => obj.size(),
-            SOMTypeWrapper::Struct(obj) => obj.size(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct SOMStruct<T: SOMType> {
-    members: Vec<T>,
-}
-
-impl<T: SOMType> SOMStruct<T> {
-    pub fn new() -> SOMStruct<T> {
-        SOMStruct {
-            members: Vec::<T>::new(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.members.len()
-    }
-
-    pub fn add(&mut self, obj: T) {
-        self.members.push(obj);
-    }
-
-    pub fn get(&self, index: usize) -> Option<&T> {
-        self.members.get(index)
-    }
-}
-
-impl<T: SOMType> SOMType for SOMStruct<T> {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
-        let offset = serializer.offset();
-
-        for member in &self.members {
-            member.serialize(serializer)?;
-        }
-
-        Ok(serializer.offset() - offset)
-    }
-
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
-        let offset = parser.offset();
-
-        for member in &mut self.members {
-            member.parse(parser)?;
-        }
-
-        Ok(parser.offset() - offset)
-    }
-
-    fn size(&self) -> usize {
-        let mut size: usize = 0;
-
-        for member in &self.members {
-            size += member.size();
-        }
-
-        size
-    }
+    som_type_wrapper!([
+        Bool(SOMBool),
+        U8(SOMu8),
+        I8(SOMi8),
+        U16(SOMu16),
+        I16(SOMi16),
+        U24(SOMu24),
+        I24(SOMi24),
+        U32(SOMu32),
+        I32(SOMi32),
+        U64(SOMu64),
+        I64(SOMi64),
+        F32(SOMf32),
+        F64(SOMf64),
+        Struct(SOMStruct),
+        Array(SOMArray),
+        ArrayBool(SOMBoolArray),
+        ArrayU8(SOMu8Array),
+        ArrayI8(SOMi8Array),
+        ArrayU16(SOMu16Array),
+        ArrayI16(SOMi16Array),
+        ArrayU24(SOMu24Array),
+        ArrayI24(SOMi24Array),
+        ArrayU32(SOMu32Array),
+        ArrayI32(SOMi32Array),
+        ArrayU64(SOMu64Array),
+        ArrayI64(SOMi64Array),
+        ArrayF23(SOMf32Array),
+        ArrayF64(SOMf64Array),
+    ]);
 }
 
 #[cfg(test)]
@@ -1002,7 +1249,7 @@ mod tests {
             Err(err) => match err {
                 SOMError::BufferExhausted(msg) => assert_eq!(msg, error),
                 SOMError::InvalidPayload(msg) => assert_eq!(msg, error),
-                SOMError::UninitializedType(msg) => assert_eq!(msg, error),
+                SOMError::InvalidType(msg) => assert_eq!(msg, error),
             },
             _ => panic!(),
         }
@@ -1014,7 +1261,7 @@ mod tests {
             Err(err) => match err {
                 SOMError::BufferExhausted(msg) => assert_eq!(msg, error),
                 SOMError::InvalidPayload(msg) => assert_eq!(msg, error),
-                SOMError::UninitializedType(msg) => assert_eq!(msg, error),
+                SOMError::InvalidType(msg) => assert_eq!(msg, error),
             },
             _ => panic!(),
         }
@@ -1024,11 +1271,11 @@ mod tests {
     fn test_som_primitive() {
         // generic
         {
-            let obj: SOMPrimitive<u8> = SOMPrimitive::new(SOMEndian::Big, 1u8);
+            let obj = SOMu8::new(SOMEndian::Big, 1u8);
             assert_eq!(SOMEndian::Big, obj.endian());
             assert_eq!(1u8, obj.get().unwrap());
 
-            let mut obj: SOMPrimitive<u8> = SOMPrimitive::empty(SOMEndian::Little);
+            let mut obj = SOMu8::empty(SOMEndian::Little);
             assert_eq!(SOMEndian::Little, obj.endian());
             assert_eq!(None, obj.get());
             obj.set(1u8);
@@ -1037,22 +1284,22 @@ mod tests {
 
         // bool
         {
-            let obj1: SOMPrimitive<bool> = SOMPrimitive::new(SOMEndian::Big, true);
-            let mut obj2: SOMPrimitive<bool> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMBool::new(SOMEndian::Big, true);
+            let mut obj2 = SOMBool::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0x01]);
             assert_eq!(true, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<bool> = SOMPrimitive::new(SOMEndian::Big, false);
-            let mut obj2: SOMPrimitive<bool> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMBool::new(SOMEndian::Big, false);
+            let mut obj2 = SOMBool::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0x00]);
             assert_eq!(false, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<bool> = SOMPrimitive::new(SOMEndian::Little, true);
-            let mut obj2: SOMPrimitive<bool> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMBool::new(SOMEndian::Little, true);
+            let mut obj2 = SOMBool::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x01]);
             assert_eq!(true, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<bool> = SOMPrimitive::new(SOMEndian::Big, true);
+            let mut obj = SOMBool::new(SOMEndian::Big, true);
             serialize_fail(
                 &obj,
                 &mut [0u8; 0],
@@ -1064,24 +1311,24 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 1",
             );
 
-            let mut obj: SOMPrimitive<bool> = SOMPrimitive::empty(SOMEndian::Big);
+            let mut obj = SOMBool::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
             parse_fail(&mut obj, &[0x2], "Invalid Bool value: 2 at offset: 0");
         }
 
         // u8
         {
-            let obj1: SOMPrimitive<u8> = SOMPrimitive::new(SOMEndian::Big, 195u8);
-            let mut obj2: SOMPrimitive<u8> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMu8::new(SOMEndian::Big, 195u8);
+            let mut obj2 = SOMu8::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xC3]);
             assert_eq!(195u8, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<u8> = SOMPrimitive::new(SOMEndian::Little, 195u8);
-            let mut obj2: SOMPrimitive<u8> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMu8::new(SOMEndian::Little, 195u8);
+            let mut obj2 = SOMu8::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0xC3]);
             assert_eq!(195u8, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<u8> = SOMPrimitive::new(SOMEndian::Big, 195u8);
+            let mut obj = SOMu8::new(SOMEndian::Big, 195u8);
             serialize_fail(
                 &obj,
                 &mut [0u8; 0],
@@ -1093,23 +1340,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 1",
             );
 
-            let obj: SOMPrimitive<u8> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMu8::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
         }
 
         // i8
         {
-            let obj1: SOMPrimitive<i8> = SOMPrimitive::new(SOMEndian::Big, -95i8);
-            let mut obj2: SOMPrimitive<i8> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMi8::new(SOMEndian::Big, -95i8);
+            let mut obj2 = SOMi8::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xA1]);
             assert_eq!(-95i8, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<i8> = SOMPrimitive::new(SOMEndian::Little, -95i8);
-            let mut obj2: SOMPrimitive<i8> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMi8::new(SOMEndian::Little, -95i8);
+            let mut obj2 = SOMi8::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0xA1]);
             assert_eq!(-95i8, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<i8> = SOMPrimitive::new(SOMEndian::Big, -95i8);
+            let mut obj = SOMi8::new(SOMEndian::Big, -95i8);
             serialize_fail(
                 &obj,
                 &mut [0u8; 0],
@@ -1121,23 +1368,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 1",
             );
 
-            let obj: SOMPrimitive<i8> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMi8::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
         }
 
         // u16
         {
-            let obj1: SOMPrimitive<u16> = SOMPrimitive::new(SOMEndian::Big, 49200u16);
-            let mut obj2: SOMPrimitive<u16> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMu16::new(SOMEndian::Big, 49200u16);
+            let mut obj2 = SOMu16::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xC0, 0x30]);
             assert_eq!(49200u16, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<u16> = SOMPrimitive::new(SOMEndian::Little, 49200u16);
-            let mut obj2: SOMPrimitive<u16> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMu16::new(SOMEndian::Little, 49200u16);
+            let mut obj2 = SOMu16::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x30, 0xC0]);
             assert_eq!(49200u16, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<u16> = SOMPrimitive::new(SOMEndian::Big, 49200u16);
+            let mut obj = SOMu16::new(SOMEndian::Big, 49200u16);
             serialize_fail(
                 &obj,
                 &mut [0u8; 1],
@@ -1149,23 +1396,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 2",
             );
 
-            let obj: SOMPrimitive<u16> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMu16::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // i16
         {
-            let obj1: SOMPrimitive<i16> = SOMPrimitive::new(SOMEndian::Big, -9200i16);
-            let mut obj2: SOMPrimitive<i16> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMi16::new(SOMEndian::Big, -9200i16);
+            let mut obj2 = SOMi16::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xDC, 0x10]);
             assert_eq!(-9200i16, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<i16> = SOMPrimitive::new(SOMEndian::Little, -9200i16);
-            let mut obj2: SOMPrimitive<i16> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMi16::new(SOMEndian::Little, -9200i16);
+            let mut obj2 = SOMi16::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x10, 0xDC]);
             assert_eq!(-9200i16, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<i16> = SOMPrimitive::new(SOMEndian::Big, -9200i16);
+            let mut obj = SOMi16::new(SOMEndian::Big, -9200i16);
             serialize_fail(
                 &obj,
                 &mut [0u8; 1],
@@ -1177,25 +1424,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 2",
             );
 
-            let obj: SOMPrimitive<i16> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMi16::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // u24
         {
-            let obj1: SOMPrimitive<u24> = SOMPrimitive::new(SOMEndian::Big, u24::new(12513060u32));
-            let mut obj2: SOMPrimitive<u24> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMu24::new(SOMEndian::Big, u24::new(12513060u32));
+            let mut obj2 = SOMu24::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xBE, 0xEF, 0x24]);
             assert_eq!(u24::new(12513060u32), obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<u24> =
-                SOMPrimitive::new(SOMEndian::Little, u24::new(12513060u32));
-            let mut obj2: SOMPrimitive<u24> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMu24::new(SOMEndian::Little, u24::new(12513060u32));
+            let mut obj2 = SOMu24::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x24, 0xEF, 0xBE]);
             assert_eq!(u24::new(12513060u32), obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<u24> =
-                SOMPrimitive::new(SOMEndian::Big, u24::new(12513060u32));
+            let mut obj = SOMu24::new(SOMEndian::Big, u24::new(12513060u32));
             serialize_fail(
                 &obj,
                 &mut [0u8; 2],
@@ -1207,25 +1452,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 3",
             );
 
-            let obj: SOMPrimitive<u24> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMu24::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // i24
         {
-            let obj1: SOMPrimitive<i24> = SOMPrimitive::new(SOMEndian::Big, i24::new(-2513060i32));
-            let mut obj2: SOMPrimitive<i24> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMi24::new(SOMEndian::Big, i24::new(-2513060i32));
+            let mut obj2 = SOMi24::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xD9, 0xA7, 0x5C]);
             assert_eq!(i24::new(-2513060i32), obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<i24> =
-                SOMPrimitive::new(SOMEndian::Little, i24::new(-2513060i32));
-            let mut obj2: SOMPrimitive<i24> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMi24::new(SOMEndian::Little, i24::new(-2513060i32));
+            let mut obj2 = SOMi24::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x5C, 0xA7, 0xD9]);
             assert_eq!(i24::new(-2513060i32), obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<i24> =
-                SOMPrimitive::new(SOMEndian::Big, i24::new(-2513060i32));
+            let mut obj = SOMi24::new(SOMEndian::Big, i24::new(-2513060i32));
             serialize_fail(
                 &obj,
                 &mut [0u8; 2],
@@ -1237,23 +1480,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 3",
             );
 
-            let obj: SOMPrimitive<i24> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMi24::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // u32
         {
-            let obj1: SOMPrimitive<u32> = SOMPrimitive::new(SOMEndian::Big, 3405691582u32);
-            let mut obj2: SOMPrimitive<u32> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMu32::new(SOMEndian::Big, 3405691582u32);
+            let mut obj2 = SOMu32::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xCA, 0xFE, 0xBA, 0xBE]);
             assert_eq!(3405691582u32, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<u32> = SOMPrimitive::new(SOMEndian::Little, 3405691582u32);
-            let mut obj2: SOMPrimitive<u32> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMu32::new(SOMEndian::Little, 3405691582u32);
+            let mut obj2 = SOMu32::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0xBE, 0xBA, 0xFE, 0xCA]);
             assert_eq!(3405691582u32, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<u32> = SOMPrimitive::new(SOMEndian::Big, 3405691582u32);
+            let mut obj = SOMu32::new(SOMEndian::Big, 3405691582u32);
             serialize_fail(
                 &obj,
                 &mut [0u8; 3],
@@ -1265,23 +1508,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 4",
             );
 
-            let obj: SOMPrimitive<u32> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMu32::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // i32
         {
-            let obj1: SOMPrimitive<i32> = SOMPrimitive::new(SOMEndian::Big, -405691582i32);
-            let mut obj2: SOMPrimitive<i32> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMi32::new(SOMEndian::Big, -405691582i32);
+            let mut obj2 = SOMi32::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0xE7, 0xD1, 0xA3, 0x42]);
             assert_eq!(-405691582i32, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<i32> = SOMPrimitive::new(SOMEndian::Little, -405691582i32);
-            let mut obj2: SOMPrimitive<i32> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMi32::new(SOMEndian::Little, -405691582i32);
+            let mut obj2 = SOMi32::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x42, 0xA3, 0xD1, 0xE7]);
             assert_eq!(-405691582i32, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<i32> = SOMPrimitive::new(SOMEndian::Big, -405691582i32);
+            let mut obj = SOMi32::new(SOMEndian::Big, -405691582i32);
             serialize_fail(
                 &obj,
                 &mut [0u8; 3],
@@ -1293,15 +1536,14 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 4",
             );
 
-            let obj: SOMPrimitive<i32> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMi32::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // u64
         {
-            let obj1: SOMPrimitive<u64> =
-                SOMPrimitive::new(SOMEndian::Big, 16045704242864831166u64);
-            let mut obj2: SOMPrimitive<u64> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMu64::new(SOMEndian::Big, 16045704242864831166u64);
+            let mut obj2 = SOMu64::empty(SOMEndian::Big);
             serialize_parse(
                 &obj1,
                 &mut obj2,
@@ -1309,9 +1551,8 @@ mod tests {
             );
             assert_eq!(16045704242864831166u64, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<u64> =
-                SOMPrimitive::new(SOMEndian::Little, 16045704242864831166u64);
-            let mut obj2: SOMPrimitive<u64> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMu64::new(SOMEndian::Little, 16045704242864831166u64);
+            let mut obj2 = SOMu64::empty(SOMEndian::Little);
             serialize_parse(
                 &obj1,
                 &mut obj2,
@@ -1319,8 +1560,7 @@ mod tests {
             );
             assert_eq!(16045704242864831166u64, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<u64> =
-                SOMPrimitive::new(SOMEndian::Big, 16045704242864831166u64);
+            let mut obj = SOMu64::new(SOMEndian::Big, 16045704242864831166u64);
             serialize_fail(
                 &obj,
                 &mut [0u8; 7],
@@ -1332,15 +1572,14 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 8",
             );
 
-            let obj: SOMPrimitive<u64> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMu64::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // i64
         {
-            let obj1: SOMPrimitive<i64> =
-                SOMPrimitive::new(SOMEndian::Big, -6045704242864831166i64);
-            let mut obj2: SOMPrimitive<i64> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMi64::new(SOMEndian::Big, -6045704242864831166i64);
+            let mut obj2 = SOMi64::empty(SOMEndian::Big);
             serialize_parse(
                 &obj1,
                 &mut obj2,
@@ -1348,9 +1587,8 @@ mod tests {
             );
             assert_eq!(-6045704242864831166i64, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<i64> =
-                SOMPrimitive::new(SOMEndian::Little, -6045704242864831166i64);
-            let mut obj2: SOMPrimitive<i64> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMi64::new(SOMEndian::Little, -6045704242864831166i64);
+            let mut obj2 = SOMi64::empty(SOMEndian::Little);
             serialize_parse(
                 &obj1,
                 &mut obj2,
@@ -1358,8 +1596,7 @@ mod tests {
             );
             assert_eq!(-6045704242864831166i64, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<i64> =
-                SOMPrimitive::new(SOMEndian::Big, -6045704242864831166i64);
+            let mut obj = SOMi64::new(SOMEndian::Big, -6045704242864831166i64);
             serialize_fail(
                 &obj,
                 &mut [0u8; 7],
@@ -1371,23 +1608,23 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 8",
             );
 
-            let obj: SOMPrimitive<i64> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMi64::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // f32
         {
-            let obj1: SOMPrimitive<f32> = SOMPrimitive::new(SOMEndian::Big, 1.0f32);
-            let mut obj2: SOMPrimitive<f32> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMf32::new(SOMEndian::Big, 1.0f32);
+            let mut obj2 = SOMf32::empty(SOMEndian::Big);
             serialize_parse(&obj1, &mut obj2, &[0x3F, 0x80, 0x00, 0x00]);
             assert_eq!(1.0f32, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<f32> = SOMPrimitive::new(SOMEndian::Little, 1.0f32);
-            let mut obj2: SOMPrimitive<f32> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMf32::new(SOMEndian::Little, 1.0f32);
+            let mut obj2 = SOMf32::empty(SOMEndian::Little);
             serialize_parse(&obj1, &mut obj2, &[0x00, 0x00, 0x80, 0x3F]);
             assert_eq!(1.0f32, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<f32> = SOMPrimitive::new(SOMEndian::Big, 1.0f32);
+            let mut obj = SOMf32::new(SOMEndian::Big, 1.0f32);
             serialize_fail(
                 &obj,
                 &mut [0u8; 3],
@@ -1399,14 +1636,14 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 4",
             );
 
-            let obj: SOMPrimitive<f32> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMf32::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
 
         // f64
         {
-            let obj1: SOMPrimitive<f64> = SOMPrimitive::new(SOMEndian::Big, 1.0f64);
-            let mut obj2: SOMPrimitive<f64> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj1 = SOMf64::new(SOMEndian::Big, 1.0f64);
+            let mut obj2 = SOMf64::empty(SOMEndian::Big);
             serialize_parse(
                 &obj1,
                 &mut obj2,
@@ -1414,8 +1651,8 @@ mod tests {
             );
             assert_eq!(1.0f64, obj2.get().unwrap());
 
-            let obj1: SOMPrimitive<f64> = SOMPrimitive::new(SOMEndian::Little, 1.0f64);
-            let mut obj2: SOMPrimitive<f64> = SOMPrimitive::empty(SOMEndian::Little);
+            let obj1 = SOMf64::new(SOMEndian::Little, 1.0f64);
+            let mut obj2 = SOMf64::empty(SOMEndian::Little);
             serialize_parse(
                 &obj1,
                 &mut obj2,
@@ -1423,7 +1660,7 @@ mod tests {
             );
             assert_eq!(1.0f64, obj2.get().unwrap());
 
-            let mut obj: SOMPrimitive<f64> = SOMPrimitive::new(SOMEndian::Big, 1.0f64);
+            let mut obj = SOMf64::new(SOMEndian::Big, 1.0f64);
             serialize_fail(
                 &obj,
                 &mut [0u8; 7],
@@ -1435,7 +1672,7 @@ mod tests {
                 "Parser exausted at offset: 0 for Object size: 8",
             );
 
-            let obj: SOMPrimitive<f64> = SOMPrimitive::empty(SOMEndian::Big);
+            let obj = SOMf64::empty(SOMEndian::Big);
             serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
         }
     }
@@ -1444,42 +1681,36 @@ mod tests {
     fn test_som_struct() {
         // empty struct
         {
-            let obj1: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
+            let obj1 = SOMStruct::new();
             assert_eq!(0, obj1.len());
 
-            let mut obj2: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
+            let mut obj2 = SOMStruct::new();
             serialize_parse(&obj1, &mut obj2, &[]);
             assert_eq!(0, obj2.len());
         }
 
         // simple struct
         {
-            let mut obj1: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            obj1.add(SOMTypeWrapper::Bool(SOMPrimitive::new(
-                SOMEndian::Big,
-                true,
-            )));
-            obj1.add(SOMTypeWrapper::U16(SOMPrimitive::new(
-                SOMEndian::Big,
-                49200u16,
-            )));
+            let mut obj1 = SOMStruct::new();
+            obj1.add(SOMStructMember::Bool(SOMBool::new(SOMEndian::Big, true)));
+            obj1.add(SOMStructMember::U16(SOMu16::new(SOMEndian::Big, 49200u16)));
             assert_eq!(2, obj1.len());
 
-            let mut obj2: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            obj2.add(SOMTypeWrapper::Bool(SOMPrimitive::empty(SOMEndian::Big)));
-            obj2.add(SOMTypeWrapper::U16(SOMPrimitive::empty(SOMEndian::Big)));
+            let mut obj2 = SOMStruct::new();
+            obj2.add(SOMStructMember::Bool(SOMBool::empty(SOMEndian::Big)));
+            obj2.add(SOMStructMember::U16(SOMu16::empty(SOMEndian::Big)));
 
             serialize_parse(&obj1, &mut obj2, &[0x01, 0xC0, 0x30]);
             assert_eq!(2, obj2.len());
 
-            if let Some(SOMTypeWrapper::Bool(child)) = obj2.get(0) {
-                assert_eq!(true, child.get().unwrap());
+            if let Some(SOMStructMember::Bool(sub)) = obj2.get(0) {
+                assert_eq!(true, sub.get().unwrap());
             } else {
                 panic!();
             }
 
-            if let Some(SOMTypeWrapper::U16(child)) = obj2.get(1) {
-                assert_eq!(49200, child.get().unwrap());
+            if let Some(SOMStructMember::U16(sub)) = obj2.get(1) {
+                assert_eq!(49200, sub.get().unwrap());
             } else {
                 panic!();
             }
@@ -1487,55 +1718,46 @@ mod tests {
 
         // complex struct
         {
-            let mut sub1: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            sub1.add(SOMTypeWrapper::Bool(SOMPrimitive::new(
-                SOMEndian::Big,
-                true,
-            )));
-            sub1.add(SOMTypeWrapper::U16(SOMPrimitive::new(
-                SOMEndian::Big,
-                49200u16,
-            )));
+            let mut sub1 = SOMStruct::new();
+            sub1.add(SOMStructMember::Bool(SOMBool::new(SOMEndian::Big, true)));
+            sub1.add(SOMStructMember::U16(SOMu16::new(SOMEndian::Big, 49200u16)));
 
-            let mut sub2: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            sub2.add(SOMTypeWrapper::U16(SOMPrimitive::new(
+            let mut sub2 = SOMStruct::new();
+            sub2.add(SOMStructMember::U16(SOMu16::new(
                 SOMEndian::Little,
                 49200u16,
             )));
-            sub2.add(SOMTypeWrapper::Bool(SOMPrimitive::new(
-                SOMEndian::Little,
-                true,
-            )));
+            sub2.add(SOMStructMember::Bool(SOMBool::new(SOMEndian::Little, true)));
 
-            let mut obj1: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            obj1.add(SOMTypeWrapper::Struct(sub1));
-            obj1.add(SOMTypeWrapper::Struct(sub2));
+            let mut obj1 = SOMStruct::new();
+            obj1.add(SOMStructMember::Struct(sub1));
+            obj1.add(SOMStructMember::Struct(sub2));
             assert_eq!(2, obj1.len());
 
-            let mut sub1: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            sub1.add(SOMTypeWrapper::Bool(SOMPrimitive::empty(SOMEndian::Big)));
-            sub1.add(SOMTypeWrapper::U16(SOMPrimitive::empty(SOMEndian::Big)));
+            let mut sub1 = SOMStruct::new();
+            sub1.add(SOMStructMember::Bool(SOMBool::empty(SOMEndian::Big)));
+            sub1.add(SOMStructMember::U16(SOMu16::empty(SOMEndian::Big)));
 
-            let mut sub2: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            sub2.add(SOMTypeWrapper::U16(SOMPrimitive::empty(SOMEndian::Little)));
-            sub2.add(SOMTypeWrapper::Bool(SOMPrimitive::empty(SOMEndian::Little)));
+            let mut sub2 = SOMStruct::new();
+            sub2.add(SOMStructMember::U16(SOMu16::empty(SOMEndian::Little)));
+            sub2.add(SOMStructMember::Bool(SOMBool::empty(SOMEndian::Little)));
 
-            let mut obj2: SOMStruct<SOMTypeWrapper> = SOMStruct::new();
-            obj2.add(SOMTypeWrapper::Struct(sub1));
-            obj2.add(SOMTypeWrapper::Struct(sub2));
+            let mut obj2 = SOMStruct::new();
+            obj2.add(SOMStructMember::Struct(sub1));
+            obj2.add(SOMStructMember::Struct(sub2));
 
             serialize_parse(&obj1, &mut obj2, &[0x01, 0xC0, 0x30, 0x30, 0xC0, 0x01]);
             assert_eq!(2, obj2.len());
 
-            if let Some(SOMTypeWrapper::Struct(sub)) = obj2.get(0) {
-                if let Some(SOMTypeWrapper::Bool(child)) = sub.get(0) {
-                    assert_eq!(true, child.get().unwrap());
+            if let Some(SOMStructMember::Struct(sub)) = obj2.get(0) {
+                if let Some(SOMStructMember::Bool(subsub)) = sub.get(0) {
+                    assert_eq!(true, subsub.get().unwrap());
                 } else {
                     panic!();
                 }
 
-                if let Some(SOMTypeWrapper::U16(child)) = sub.get(1) {
-                    assert_eq!(49200, child.get().unwrap());
+                if let Some(SOMStructMember::U16(subsub)) = sub.get(1) {
+                    assert_eq!(49200, subsub.get().unwrap());
                 } else {
                     panic!();
                 }
@@ -1543,15 +1765,15 @@ mod tests {
                 panic!();
             }
 
-            if let Some(SOMTypeWrapper::Struct(sub)) = obj2.get(1) {
-                if let Some(SOMTypeWrapper::U16(child)) = sub.get(0) {
-                    assert_eq!(49200, child.get().unwrap());
+            if let Some(SOMStructMember::Struct(sub)) = obj2.get(1) {
+                if let Some(SOMStructMember::U16(subsub)) = sub.get(0) {
+                    assert_eq!(49200, subsub.get().unwrap());
                 } else {
                     panic!();
                 }
 
-                if let Some(SOMTypeWrapper::Bool(child)) = sub.get(1) {
-                    assert_eq!(true, child.get().unwrap());
+                if let Some(SOMStructMember::Bool(subsub)) = sub.get(1) {
+                    assert_eq!(true, subsub.get().unwrap());
                 } else {
                     panic!();
                 }
@@ -1570,5 +1792,127 @@ mod tests {
                 "Parser exausted at offset: 5 for Object size: 1",
             );
         }
+
+        // struct with array
+        {
+            let mut sub1 = SOMu16Array::fixed(3);
+            let mut sub2 = SOMu16Array::fixed(3);
+            for i in 0..3 {
+                sub1.add(SOMu16::new(SOMEndian::Big, (i + 1) as u16));
+                sub2.add(SOMu16::empty(SOMEndian::Big));
+            }
+
+            let mut obj1 = SOMStruct::new();
+            obj1.add(SOMStructMember::ArrayU16(sub1));
+            assert_eq!(1, obj1.len());
+
+            let mut obj2 = SOMStruct::new();
+            obj2.add(SOMStructMember::ArrayU16(sub2));
+
+            serialize_parse(&obj1, &mut obj2, &[0x00, 0x01, 0x00, 0x02, 0x00, 0x03]);
+            assert_eq!(1, obj2.len());
+
+            if let Some(SOMStructMember::ArrayU16(sub)) = obj2.get(0) {
+                assert_eq!(3, sub.len());
+                for i in 0..3 {
+                    assert_eq!((i + 1) as u16, sub.get(i).unwrap().get().unwrap());
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        // struct with array of array
+        {
+            let mut subsub1 = SOMu8Array::fixed(3);
+            let mut subsub2 = SOMu8Array::fixed(3);
+            for i in 0..3 {
+                subsub1.add(SOMu8::new(SOMEndian::Big, (i + 1) as u8));
+                subsub2.add(SOMu8::empty(SOMEndian::Big));
+            }
+
+            let mut sub1 = SOMArray::dynamic(SOMLengthField::U8, 0, 3);
+            sub1.add(SOMArrayMember::ArrayU8(subsub1));
+
+            let mut sub2 = SOMArray::dynamic(SOMLengthField::U8, 0, 3);
+            sub2.add(SOMArrayMember::ArrayU8(subsub2));
+
+            let mut obj1 = SOMStruct::new();
+            obj1.add(SOMStructMember::Array(sub1));
+            assert_eq!(1, obj1.len());
+
+            let mut obj2 = SOMStruct::new();
+            obj2.add(SOMStructMember::Array(sub2));
+
+            serialize_parse(&obj1, &mut obj2, &[0x03, 0x01, 0x02, 0x03]);
+            assert_eq!(1, obj2.len());
+
+            if let Some(SOMStructMember::Array(sub)) = obj2.get(0) {
+                assert_eq!(1, sub.len());
+                if let Some(SOMArrayMember::ArrayU8(subsub)) = sub.get(0) {
+                    assert_eq!(3, subsub.len());
+                    for i in 0..3 {
+                        assert_eq!((i + 1) as u8, subsub.get(i).unwrap().get().unwrap());
+                    }
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        // TODO failure tests
+    }
+
+    #[test]
+    fn test_som_array() {
+        // static array
+        {
+            let mut obj1 = SOMu16Array::fixed(3);
+            let mut obj2 = SOMu16Array::fixed(3);
+            assert!(!obj1.is_dynamic());
+            assert_eq!(0, obj1.len());
+
+            for i in 0..3 {
+                obj1.add(SOMu16::new(SOMEndian::Big, (i + 1) as u16));
+                obj2.add(SOMu16::empty(SOMEndian::Big));
+            }
+            assert_eq!(3, obj1.len());
+
+            serialize_parse(&obj1, &mut obj2, &[0x00, 0x01, 0x00, 0x02, 0x00, 0x03]);
+            assert!(!obj2.is_dynamic());
+            assert_eq!(3, obj2.len());
+            for i in 0..3 {
+                assert_eq!((i + 1) as u16, obj2.get(i).unwrap().get().unwrap());
+            }
+        }
+
+        // dynamic array
+        {
+            let mut obj1 = SOMu16Array::dynamic(SOMLengthField::U32, 0, 3);
+            let mut obj2 = SOMu16Array::dynamic(SOMLengthField::U32, 0, 3);
+            assert!(obj1.is_dynamic());
+            assert_eq!(0, obj1.len());
+
+            for i in 0..3 {
+                obj1.add(SOMu16::new(SOMEndian::Big, (i + 1) as u16));
+                obj2.add(SOMu16::empty(SOMEndian::Big));
+            }
+            assert_eq!(3, obj1.len());
+
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03],
+            );
+            assert!(obj2.is_dynamic());
+            assert_eq!(3, obj2.len());
+            for i in 0..3 {
+                assert_eq!((i + 1) as u16, obj2.get(i).unwrap().get().unwrap());
+            }
+        }
+
+        // TODO failure tests
     }
 }
