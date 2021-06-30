@@ -34,6 +34,8 @@ pub struct SomeIpMessage<'a> {
 #[derive(Debug, PartialEq)]
 pub enum SomeIp<'a> {
     SomeIpMessage(SomeIpMessage<'a>),
+    SomeIpMagicCookieClient,
+    SomeIpMagicCookieServer,
 }
 
 /// Represents the MessageID within the SomeIP header.
@@ -198,8 +200,8 @@ impl From<&[u8]> for MessageType {
 }
 
 /// Transforms a MessageType to a bytes slice
-impl<'a> From<MessageType> for &'a[u8] {
-    fn from(i: MessageType) -> &'a[u8] {
+impl<'a> From<MessageType> for &'a [u8] {
+    fn from(i: MessageType) -> &'a [u8] {
         match i {
             Request => &[0x00],
             RequestNoReturn => &[0x01],
@@ -320,8 +322,47 @@ pub fn someip_header(input: &[u8]) -> IResult<&[u8], SomeIpHeader> {
 /// Parses the different kinds of SomeIP messages (at the moment only basic type) as Result.
 pub fn someip_message(input: &[u8]) -> Result<SomeIp> {
     match someip_header(input) {
-        Ok((payload, header)) => return Ok(SomeIp::SomeIpMessage(SomeIpMessage{header, payload})),
-        Err(_) => {Err(SomeIpError)}
+        Ok((_, SomeIpHeader {
+            message_id: MessageID {
+                service_id: ServiceID(0xFFFF),
+                method_id: MethodID(0x0000),
+            },
+            length: 8,
+            request_id: RequestID {
+                client_id: ClientID(0xDEAD),
+                session_id: SessionID(0xBEEF),
+            },
+            protocol_version: 0x01,
+            interface_version: 0x01,
+            message_type: MessageType::RequestNoReturn,
+            return_code: ReturnCode::EOk,
+        })) => {
+            Ok(SomeIp::SomeIpMagicCookieClient)
+        }
+
+        Ok((_, SomeIpHeader {
+            message_id: MessageID {
+                service_id: ServiceID(0xFFFF),
+                method_id: MethodID(0x8000),
+            },
+            length: 8,
+            request_id: RequestID {
+                client_id: ClientID(0xDEAD),
+                session_id: SessionID(0xBEEF),
+            },
+            protocol_version: 0x01,
+            interface_version: 0x01,
+            message_type: MessageType::Notification,
+            return_code: ReturnCode::EOk,
+        })) => {
+            Ok(SomeIp::SomeIpMagicCookieServer)
+        }
+
+        Ok((payload, header)) => {
+            return Ok(SomeIp::SomeIpMessage(SomeIpMessage { header, payload }));
+        }
+
+        Err(_) => { Err(SomeIpError) }
     }
 }
 
@@ -438,12 +479,12 @@ mod tests {
                 SomeIpHeader {
                     message_id: MessageID {
                         method_id: MethodID(0x8005),
-                        service_id: ServiceID(0x0103)
+                        service_id: ServiceID(0x0103),
                     },
                     length: 13,
                     request_id: RequestID {
                         client_id: ClientID(0x0000),
-                        session_id: SessionID(0x0000)
+                        session_id: SessionID(0x0000),
                     },
                     protocol_version: 0x01,
                     interface_version: 0x01,
@@ -483,7 +524,7 @@ mod tests {
             message_id,
             MessageID {
                 method_id: MethodID(0x8005),
-                service_id: ServiceID(0x0103)
+                service_id: ServiceID(0x0103),
             }
         );
         assert_eq!(length, 13);
@@ -491,7 +532,7 @@ mod tests {
             request_id,
             RequestID {
                 client_id: ClientID(0x0000),
-                session_id: SessionID(0x0000)
+                session_id: SessionID(0x0000),
             }
         );
         assert_eq!(protocol_version, 0x01);
