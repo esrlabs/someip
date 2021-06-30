@@ -21,19 +21,55 @@ fn serialize_someip_header(header: &SomeIpHeader) -> Vec<u8> {
 /// Serialization of a SomeIP message to bytes
 pub fn serialize_someip(package: &SomeIp) -> Vec<u8> {
     match package {
-        SomeIp::SomeIpMessage(p)=> {
+        SomeIp::SomeIpMessage(p) => {
             let mut buf = serialize_someip_header(&p.header);
             buf.put(p.payload);
             buf
         }
+        SomeIp::SomeIpMagicCookieClient => {
+            let magic_cookie = SomeIpHeader {
+                message_id: MessageID {
+                    service_id: ServiceID(0xFFFF),
+                    method_id: MethodID(0x0000),
+                },
+                length: 8,
+                request_id: RequestID {
+                    client_id: ClientID(0xDEAD),
+                    session_id: SessionID(0xBEEF),
+                },
+                protocol_version: 0x01,
+                interface_version: 0x01,
+                message_type: MessageType::RequestNoReturn,
+                return_code: ReturnCode::EOk,
+            };
+            serialize_someip_header(&magic_cookie)
+        }
+        SomeIp::SomeIpMagicCookieServer => {
+            let magic_cookie = SomeIpHeader {
+                message_id: MessageID {
+                    service_id: ServiceID(0xFFFF),
+                    method_id: MethodID(0x8000),
+                },
+                length: 8,
+                request_id: RequestID {
+                    client_id: ClientID(0xDEAD),
+                    session_id: SessionID(0xBEEF),
+                },
+                protocol_version: 0x01,
+                interface_version: 0x01,
+                message_type: MessageType::Notification,
+                return_code: ReturnCode::EOk,
+            };
+            serialize_someip_header(&magic_cookie)
+        }
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::{MessageID, MethodID, ServiceID, RequestID, MessageType, ReturnCode};
+    use crate::parser::SomeIp::SomeIpMagicCookieClient;
 
 
     #[test]
@@ -60,12 +96,12 @@ mod tests {
                 &SomeIpHeader {
                     message_id: MessageID {
                         method_id: MethodID(0x0001),
-                        service_id: ServiceID(0x3085)
+                        service_id: ServiceID(0x3085),
                     },
                     length: 8,
                     request_id: RequestID {
                         client_id: ClientID(0x0000),
-                        session_id: SessionID(0x0000)
+                        session_id: SessionID(0x0000),
                     },
                     protocol_version: 0x01,
                     interface_version: 0x01,
@@ -75,6 +111,7 @@ mod tests {
             )
         )
     }
+
     #[test]
     fn check_someip_package_serializer() {
         // SOME/IP Protocol (Service ID: 0x0103, Method ID: 0x8005, Length: 13)
@@ -100,22 +137,22 @@ mod tests {
                 &SomeIp::SomeIpMessage(
                     SomeIpMessage {
                         header:
-                            SomeIpHeader {
+                        SomeIpHeader {
                             message_id: MessageID {
                                 method_id: MethodID(0x8005),
-                                service_id: ServiceID(0x0103)
+                                service_id: ServiceID(0x0103),
                             },
                             length: 13,
                             request_id: RequestID {
                                 client_id: ClientID(0x0000),
-                                session_id: SessionID(0x0000)
+                                session_id: SessionID(0x0000),
                             },
                             protocol_version: 0x01,
                             interface_version: 0x01,
                             message_type: MessageType::Notification,
                             return_code: ReturnCode::EOk,
                         },
-                    payload
+                        payload,
                     }
                 )
             )
