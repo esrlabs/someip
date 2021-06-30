@@ -24,12 +24,14 @@ pub struct SomeIpHeader {
 }
 
 /// Represents a basic SomeIP message
+#[derive(Debug, PartialEq)]
 pub struct SomeIpMessage<'a> {
     pub header: SomeIpHeader,
     pub payload: &'a [u8],
 }
 
 /// Different types of supported SomeIP messages
+#[derive(Debug, PartialEq)]
 pub enum SomeIp<'a> {
     SomeIpMessage(SomeIpMessage<'a>),
 }
@@ -42,30 +44,30 @@ pub struct MessageID {
 }
 
 /// Represents the MethodID within the MessageID
-#[derive(Debug, Default, PartialEq)]
-pub struct MethodID(u16);
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct MethodID(pub u16);
 
 /// Represents the ServiceID within the MessageID
-#[derive(Debug, Default, PartialEq)]
-pub struct ServiceID(u16);
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct ServiceID(pub u16);
 
 /// Represents the RequestID within the SomeIP header
 #[derive(Debug, Default, PartialEq)]
 pub struct RequestID {
-    client_id: ClientID,
-    session_id: SessionID,
+    pub(crate) client_id: ClientID,
+    pub(crate) session_id: SessionID,
 }
 
 /// Represents the ClientID within the RequestID
-#[derive(Debug, Default, PartialEq)]
-struct ClientID(u16);
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct ClientID(pub u16);
 
 /// Represents the SessionID within the RequestID
-#[derive(Debug, Default, PartialEq)]
-struct SessionID(u16);
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct SessionID(pub u16);
 
 /// Different kinds of MessagesTypes accepted in a SomeIP header
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MessageType {
     Request,
     RequestNoReturn,
@@ -84,7 +86,7 @@ pub enum MessageType {
 }
 
 /// Different kinds of ReturnCodes accepted in a SomeIP header
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ReturnCode {
     EOk,
     NotOk,
@@ -124,10 +126,25 @@ impl From<u16> for ServiceID {
     }
 }
 
+
+/// Transforms a ServiceId to an u16
+impl From<ServiceID> for u16 {
+    fn from(i: ServiceID) -> Self {
+        i.0
+    }
+}
+
 /// Transforms an u16 to a MethodID
 impl From<u16> for MethodID {
     fn from(i: u16) -> Self {
         MethodID(i)
+    }
+}
+
+/// Transforms a MethodID to an u16
+impl From<MethodID> for u16 {
+    fn from(i: MethodID) -> Self {
+        i.0
     }
 }
 
@@ -138,12 +155,28 @@ impl From<u16> for ClientID {
     }
 }
 
+/// Transforms a ClientId to an u16
+impl From<ClientID> for u16 {
+    fn from(i: ClientID) -> Self {
+        i.0
+    }
+}
+
+
 /// Transforms an u16 to a SessionID
 impl From<u16> for SessionID {
     fn from(i: u16) -> Self {
         SessionID(i)
     }
 }
+
+/// Transforms a SessionID to an u16
+impl From<SessionID> for u16 {
+    fn from(i: SessionID) -> Self {
+        i.0
+    }
+}
+
 
 /// Transforms a byte slice to a MessageType
 impl From<&[u8]> for MessageType {
@@ -160,6 +193,44 @@ impl From<&[u8]> for MessageType {
             [0xa0] => TpResponse,
             [0xa1] => TpError,
             value => unimplemented!("MessageType {:?} not implemented", value),
+        }
+    }
+}
+
+/// Transforms a MessageType to a bytes slice
+impl<'a> From<MessageType> for &'a[u8] {
+    fn from(i: MessageType) -> &'a[u8] {
+        match i {
+            Request => &[0x00],
+            RequestNoReturn => &[0x01],
+            Notification => &[0x02],
+            Response => &[0x80],
+            Error => &[0x81],
+            TpRequest => &[0x20],
+            TpRequestNoReturn => &[0x21],
+            TpNotification => &[0x22],
+            TpResponse => &[0xa0],
+            TpError => &[0xa1],
+            value => unimplemented!("MessageType for {:?} not implemented", value),
+        }
+    }
+}
+
+/// Transforms a MessageType to a u8
+impl From<MessageType> for u8 {
+    fn from(i: MessageType) -> u8 {
+        match i {
+            Request => 0x00,
+            RequestNoReturn => 0x01,
+            Notification => 0x02,
+            Response => 0x80,
+            Error => 0x81,
+            TpRequest => 0x20,
+            TpRequestNoReturn => 0x21,
+            TpNotification => 0x22,
+            TpResponse => 0xa0,
+            TpError => 0xa1,
+            value => unimplemented!("MessageType for {:?} not implemented", value),
         }
     }
 }
@@ -185,6 +256,31 @@ impl From<&[u8]> for ReturnCode {
             [0x0e] => E2eNotAvailable,
             [0x0f] => E2eNoNewData,
             value => unimplemented!("MessageType {:?} not implemented", value),
+        }
+    }
+}
+
+/// Transforms a byte slice to a ReturnCode
+impl From<ReturnCode> for u8 {
+    fn from(i: ReturnCode) -> Self {
+        match i {
+            EOk => 0x00,
+            NotOk => 0x01,
+            UnknownService => 0x02,
+            UnknownMethod => 0x03,
+            NotReady => 0x04,
+            NotReachable => 0x05,
+            Timeout => 0x06,
+            WrongProtocolVersion => 0x07,
+            WrongInterfaceVersion => 0x08,
+            MalformedMessage => 0x09,
+            WrongMessageType => 0x0a,
+            E2eRepeated => 0x0b,
+            E2eWrongSequence => 0x0c,
+            E2e => 0x0d,
+            E2eNotAvailable => 0x0e,
+            E2eNoNewData => 0x0f,
+            // value => unimplemented!("MessageType {:?} not implemented", value),
         }
     }
 }
