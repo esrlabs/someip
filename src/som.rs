@@ -1700,7 +1700,14 @@ mod tests {
             obj2.add(SOMStructMember::Bool(SOMBool::empty(SOMEndian::Big)));
             obj2.add(SOMStructMember::U16(SOMu16::empty(SOMEndian::Big)));
 
-            serialize_parse(&obj1, &mut obj2, &[0x01, 0xC0, 0x30]);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x01, // Bool-Memeber
+                    0xC0, 0x30, // U16-Member
+                ],
+            );
             assert_eq!(2, obj2.len());
 
             if let Some(SOMStructMember::Bool(sub)) = obj2.get(0) {
@@ -1714,6 +1721,17 @@ mod tests {
             } else {
                 panic!();
             }
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 2],
+                "Serializer exausted at offset: 1 for Object size: 2",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 2],
+                "Parser exausted at offset: 1 for Object size: 2",
+            );
         }
 
         // complex struct
@@ -1746,7 +1764,16 @@ mod tests {
             obj2.add(SOMStructMember::Struct(sub1));
             obj2.add(SOMStructMember::Struct(sub2));
 
-            serialize_parse(&obj1, &mut obj2, &[0x01, 0xC0, 0x30, 0x30, 0xC0, 0x01]);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x01, // Bool-Member
+                    0xC0, 0x30, // U16-Member
+                    0x30, 0xC0, // U16-Member
+                    0x01, // Bool-Member
+                ],
+            );
             assert_eq!(2, obj2.len());
 
             if let Some(SOMStructMember::Struct(sub)) = obj2.get(0) {
@@ -1791,6 +1818,12 @@ mod tests {
                 &[0u8; 5],
                 "Parser exausted at offset: 5 for Object size: 1",
             );
+
+            let mut obj = SOMStruct::new();
+            obj.add(SOMStructMember::Bool(SOMBool::empty(SOMEndian::Big)));
+
+            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
+            parse_fail(&mut obj, &[0x2], "Invalid Bool value: 2 at offset: 0");
         }
 
         // struct with array
@@ -1809,7 +1842,15 @@ mod tests {
             let mut obj2 = SOMStruct::new();
             obj2.add(SOMStructMember::ArrayU16(sub2));
 
-            serialize_parse(&obj1, &mut obj2, &[0x00, 0x01, 0x00, 0x02, 0x00, 0x03]);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x01, // Array-Member (U16)
+                    0x00, 0x02, // Array-Member (U16)
+                    0x00, 0x03, // Array-Member (U16)
+                ],
+            );
             assert_eq!(1, obj2.len());
 
             if let Some(SOMStructMember::ArrayU16(sub)) = obj2.get(0) {
@@ -1844,7 +1885,16 @@ mod tests {
             let mut obj2 = SOMStruct::new();
             obj2.add(SOMStructMember::Array(sub2));
 
-            serialize_parse(&obj1, &mut obj2, &[0x03, 0x01, 0x02, 0x03]);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x03, // Length-Field (U8)
+                    0x01, // Array-Mamber (U8)
+                    0x02, // Array-Mamber (U8)
+                    0x03, // Array-Mamber (U8)
+                ],
+            );
             assert_eq!(1, obj2.len());
 
             if let Some(SOMStructMember::Array(sub)) = obj2.get(0) {
@@ -1861,8 +1911,6 @@ mod tests {
                 panic!();
             }
         }
-
-        // TODO failure tests
     }
 
     #[test]
@@ -1880,12 +1928,31 @@ mod tests {
             }
             assert_eq!(3, obj1.len());
 
-            serialize_parse(&obj1, &mut obj2, &[0x00, 0x01, 0x00, 0x02, 0x00, 0x03]);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x01, // Array-Member (U16)
+                    0x00, 0x02, // Array-Member (U16)
+                    0x00, 0x03, // Array-Member (U16)
+                ],
+            );
             assert!(!obj2.is_dynamic());
             assert_eq!(3, obj2.len());
             for i in 0..3 {
                 assert_eq!((i + 1) as u16, obj2.get(i).unwrap().get().unwrap());
             }
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 5],
+                "Serializer exausted at offset: 4 for Object size: 2",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 5],
+                "Parser exausted at offset: 4 for Object size: 2",
+            );
         }
 
         // dynamic array
@@ -1904,15 +1971,59 @@ mod tests {
             serialize_parse(
                 &obj1,
                 &mut obj2,
-                &[0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03],
+                &[
+                    0x00, 0x00, 0x00, 0x06, // Length-Field (U32)
+                    0x00, 0x01, // Array-Member (U16)
+                    0x00, 0x02, // Array-Member (U16)
+                    0x00, 0x03, // Array-Member (U16)
+                ],
             );
             assert!(obj2.is_dynamic());
             assert_eq!(3, obj2.len());
             for i in 0..3 {
                 assert_eq!((i + 1) as u16, obj2.get(i).unwrap().get().unwrap());
             }
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 3],
+                "Serializer exausted at offset: 0 for Object size: 4",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 3],
+                "Parser exausted at offset: 0 for Object size: 4",
+            );
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 9],
+                "Serializer exausted at offset: 8 for Object size: 2",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 9],
+                "Parser exausted at offset: 8 for Object size: 2",
+            );
         }
 
-        // TODO failure tests
+        // invalid length
+        {
+            let mut obj = SOMu8Array::dynamic(SOMLengthField::U8, 1, 3);
+
+            serialize_fail(&obj, &mut [0u8; 4], "Invalid Array length: 0 at offset: 0");
+            parse_fail(&mut obj, &[0u8; 4], "Invalid Array length: 0 at offset: 0");
+        }
+
+        // invalid member
+        {
+            let mut obj = SOMArray::fixed(3);
+
+            obj.add(SOMArrayMember::Bool(SOMBool::new(SOMEndian::Big, true)));
+            assert_eq!(1, obj.len());
+
+            obj.add(SOMArrayMember::U8(SOMu8::new(SOMEndian::Big, 1 as u8)));
+            assert_eq!(1, obj.len());
+        }
     }
 }
