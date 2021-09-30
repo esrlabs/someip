@@ -1053,7 +1053,7 @@ mod arrays {
         }
 
         fn check_length(&self, offset: usize) -> Result<(), SOMError> {
-            let length = self.elements.len();
+            let length: usize = self.elements.len();
             if (length < self.min) || (length > self.max) {
                 return Err(SOMError::InvalidType(format!(
                     "Invalid Array length: {} at offset: {}",
@@ -1077,6 +1077,7 @@ mod arrays {
             self.check_length(offset)?;
 
             let lengthfield_promise = serializer.promise(self.lengthfield.size())?;
+
             for element in &self.elements {
                 element.serialize(serializer)?;
             }
@@ -1097,16 +1098,17 @@ mod arrays {
             let offset = parser.offset();
             self.check_length(offset)?;
 
-            let lengthfield_size = parser.read_lengthfield(self.lengthfield)?;
+            let lengthfield_value = parser.read_lengthfield(self.lengthfield)?;
+
             for element in &mut self.elements {
                 element.parse(parser)?;
             }
 
             let size = parser.offset() - offset;
-            if self.is_dynamic() && (lengthfield_size != (size - self.lengthfield.size())) {
+            if self.is_dynamic() && (lengthfield_value != (size - self.lengthfield.size())) {
                 return Err(SOMError::InvalidPayload(format!(
-                    "Invalid Length-Field size: {} at offset: {}",
-                    lengthfield_size, offset
+                    "Invalid Length-Field value: {} at offset: {}",
+                    lengthfield_value, offset
                 )));
             }
 
@@ -1570,6 +1572,356 @@ pub type SOMu16Enum = enums::SOMEnumType<u16>;
 pub type SOMu32Enum = enums::SOMEnumType<u32>;
 pub type SOMu64Enum = enums::SOMEnumType<u64>;
 
+mod strings {
+    use super::*;
+
+    const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+    const UTF8_TERMINATION: [u8; 1] = [0x00];
+    const UTF16_BOM_BE: [u8; 2] = [0xFE, 0xFF];
+    const UTF16_BOM_LE: [u8; 2] = [0xFF, 0xFE];
+    const UTF16_TERMINATION: [u8; 2] = [0x00, 0x00];
+
+    #[derive(Debug, Copy, Clone, PartialEq)]
+    pub enum SOMStringEncoding {
+        Utf8,
+        Utf16Be,
+        Utf16Le,
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq)]
+    pub enum SOMStringFormat {
+        Plain,
+        WithBOM,
+        WithTermination,
+        WithBOMandTermination,
+    }
+
+    fn char_size(encoding: SOMStringEncoding) -> usize {
+        match encoding {
+            SOMStringEncoding::Utf8 => std::mem::size_of::<u8>(),
+            _ => std::mem::size_of::<u16>(),
+        }
+    }
+
+    fn string_len(encoding: SOMStringEncoding, bytes: &[u8]) -> usize {
+        let bytes_len = bytes.len();
+        let char_size = char_size(encoding);
+
+        let len = bytes_len / char_size;
+        if (bytes_len % char_size) != 0 {
+            return len + 1;
+        }
+        len
+    }
+
+    #[derive(Debug)]
+    pub struct SOMStringType {
+        lengthfield: SOMLengthField,
+        encoding: SOMStringEncoding,
+        format: SOMStringFormat,
+        value: String,
+        min: usize,
+        max: usize,
+    }
+
+    impl SOMStringType {
+        pub fn fixed(
+            encoding: SOMStringEncoding,
+            format: SOMStringFormat,
+            size: usize,
+        ) -> SOMStringType {
+            SOMStringType {
+                lengthfield: SOMLengthField::None,
+                encoding,
+                format,
+                value: String::from(""),
+                min: size,
+                max: size,
+            }
+        }
+
+        pub fn dynamic(
+            lengthfield: SOMLengthField,
+            encoding: SOMStringEncoding,
+            format: SOMStringFormat,
+            min: usize,
+            max: usize,
+        ) -> SOMStringType {
+            SOMStringType {
+                lengthfield,
+                encoding,
+                format,
+                value: String::from(""),
+                min,
+                max,
+            }
+        }
+
+        pub fn len(&self) -> usize {
+            self.string_len(&self.value)
+        }
+
+        fn string_len(&self, value: &String) -> usize {
+            let bom_len = string_len(self.encoding, &self.bom());
+            let termination_len = string_len(self.encoding, &self.termination());
+
+            value.len()
+                + match self.format {
+                    SOMStringFormat::Plain => 0,
+                    SOMStringFormat::WithBOM => bom_len,
+                    SOMStringFormat::WithTermination => termination_len,
+                    SOMStringFormat::WithBOMandTermination => bom_len + termination_len,
+                }
+        }
+
+        fn bom(&self) -> Vec<u8> {
+            match self.encoding {
+                SOMStringEncoding::Utf8 => UTF8_BOM.to_vec(),
+                SOMStringEncoding::Utf16Be => UTF16_BOM_BE.to_vec(),
+                SOMStringEncoding::Utf16Le => UTF16_BOM_LE.to_vec(),
+            }
+        }
+
+        fn termination(&self) -> Vec<u8> {
+            match self.encoding {
+                SOMStringEncoding::Utf8 => UTF8_TERMINATION.to_vec(),
+                _ => UTF16_TERMINATION.to_vec(),
+            }
+        }
+
+        pub fn is_dynamic(&self) -> bool {
+            (self.min != self.max) || (self.lengthfield != SOMLengthField::None)
+        }
+
+        pub fn has_bom(&self) -> bool {
+            match self.format {
+                SOMStringFormat::WithBOM => true,
+                SOMStringFormat::WithBOMandTermination => true,
+                _ => false,
+            }
+        }
+
+        pub fn has_termination(&self) -> bool {
+            match self.format {
+                SOMStringFormat::WithTermination => true,
+                SOMStringFormat::WithBOMandTermination => true,
+                _ => false,
+            }
+        }
+
+        pub fn set(&mut self, value: String) -> bool {
+            if self.string_len(&value) <= self.max {
+                self.value = value;
+                return true;
+            }
+
+            false
+        }
+
+        pub fn get(&self) -> &str {
+            &self.value
+        }
+
+        fn check_length(&self, offset: usize) -> Result<(), SOMError> {
+            let length: usize = self.len();
+
+            let valid: bool;
+            if self.is_dynamic() {
+                valid = (self.min <= length) && (length <= self.max);
+            } else {
+                valid = length <= self.max;
+            }
+
+            if !valid {
+                return Err(SOMError::InvalidType(format!(
+                    "Invalid String length: {} at offset: {}",
+                    length, offset
+                )));
+            }
+
+            Ok(())
+        }
+    }
+
+    impl SOMTypeWithEndian for SOMStringType {
+        fn endian(&self) -> SOMEndian {
+            match self.encoding {
+                SOMStringEncoding::Utf8 => SOMEndian::Big,
+                SOMStringEncoding::Utf16Be => SOMEndian::Big,
+                SOMStringEncoding::Utf16Le => SOMEndian::Little,
+            }
+        }
+    }
+
+    impl SOMTypeWithLengthField for SOMStringType {
+        fn lengthfield(&self) -> SOMLengthField {
+            self.lengthfield
+        }
+    }
+
+    impl SOMType for SOMStringType {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+            self.check_length(offset)?;
+
+            let lengthfield_promise = serializer.promise(self.lengthfield.size())?;
+
+            let char_size = char_size(self.encoding);
+            let mut string_size = 0usize;
+
+            if self.has_bom() {
+                for item in self.bom() {
+                    serializer.write_u8(item)?;
+                }
+                string_size += char_size * string_len(self.encoding, &self.bom());
+            }
+
+            match self.encoding {
+                SOMStringEncoding::Utf8 => {
+                    let bytes: Vec<u8> = self.value.clone().into_bytes();
+                    for item in bytes {
+                        serializer.write_u8(item)?;
+                        string_size += char_size;
+                    }
+                }
+                _ => {
+                    let bytes: Vec<u16> = self.value.encode_utf16().collect();
+                    for item in bytes {
+                        serializer.write_u16(item, self.endian())?;
+                        string_size += char_size;
+                    }
+                }
+            }
+
+            if self.has_termination() {
+                for item in self.termination() {
+                    serializer.write_u8(item)?;
+                }
+                string_size += char_size * string_len(self.encoding, &self.termination());
+            }
+
+            let size;
+            if self.is_dynamic() {
+                size = serializer.offset() - offset;
+                serializer.write_lengthfield(
+                    lengthfield_promise,
+                    self.lengthfield,
+                    size - self.lengthfield.size(),
+                )?;
+            } else {
+                let max_size = char_size * self.max;
+                while string_size < max_size {
+                    serializer.write_u8(0x00)?;
+                    string_size += std::mem::size_of::<u8>();
+                }
+                size = serializer.offset() - offset;
+            }
+
+            Ok(size)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            let lengthfield_value = parser.read_lengthfield(self.lengthfield)?;
+
+            let char_size = char_size(self.encoding);
+            let mut string_size = lengthfield_value;
+
+            if !self.is_dynamic() {
+                string_size = char_size * self.max;
+            }
+
+            if self.has_termination() {
+                string_size -= self.termination().len();
+            }
+
+            let mut valid = true;
+            if self.has_bom() {
+                for item in self.bom() {
+                    let value = parser.read_u8()?;
+                    if value != item {
+                        valid = false;
+                        break;
+                    }
+                    string_size -= std::mem::size_of::<u8>();
+                }
+            }
+            if !valid {
+                return Err(SOMError::InvalidPayload(format!(
+                    "Invalid String-BOM at offset: {}",
+                    parser.offset()
+                )));
+            }
+
+            let value: String;
+            match self.encoding {
+                SOMStringEncoding::Utf8 => {
+                    let mut bytes: Vec<u8> = vec![];
+                    while string_size >= char_size {
+                        bytes.push(parser.read_u8()?);
+                        string_size -= char_size;
+                    }
+                    value = String::from_utf8(bytes).unwrap();
+                }
+                _ => {
+                    let mut bytes: Vec<u16> = vec![];
+                    while string_size >= char_size {
+                        bytes.push(parser.read_u16(self.endian())?);
+                        string_size -= char_size;
+                    }
+                    value = String::from_utf16(&bytes).unwrap()
+                }
+            }
+            self.value = value.trim_end_matches(char::from(0x00)).to_string();
+
+            if self.has_termination() {
+                for item in self.termination() {
+                    let value = parser.read_u8()?;
+                    if value != item {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if !valid {
+                return Err(SOMError::InvalidPayload(format!(
+                    "Invalid String-Termination at offset: {}",
+                    parser.offset()
+                )));
+            }
+
+            let size = parser.offset() - offset;
+            if self.is_dynamic() && (lengthfield_value != (size - self.lengthfield.size())) {
+                return Err(SOMError::InvalidPayload(format!(
+                    "Invalid Length-Field value: {} at offset: {}",
+                    lengthfield_value, offset
+                )));
+            }
+
+            self.check_length(offset)?;
+            Ok(size)
+        }
+
+        fn size(&self) -> usize {
+            let mut size: usize = 0;
+
+            if self.is_dynamic() {
+                size += self.lengthfield.size();
+                size += char_size(self.encoding) * self.len();
+            } else {
+                size += char_size(self.encoding) * self.max;
+            }
+
+            size
+        }
+    }
+}
+
+pub type SOMStringEncoding = strings::SOMStringEncoding;
+pub type SOMStringFormat = strings::SOMStringFormat;
+pub type SOMString = strings::SOMStringType;
+
 mod wrapper {
     use super::*;
 
@@ -1634,6 +1986,7 @@ mod wrapper {
         EnumU16(SOMu16Enum),
         EnumU32(SOMu32Enum),
         EnumU64(SOMu64Enum),
+        String(SOMString),
     ]);
 }
 
@@ -1642,6 +1995,11 @@ mod tests {
     use super::*;
 
     fn serialize_parse<T: SOMType>(obj1: &T, obj2: &mut T, data: &[u8]) {
+        serialize(obj1, data);
+        parse(obj2, data);
+    }
+
+    fn serialize<T: SOMType>(obj1: &T, data: &[u8]) {
         let size = data.len();
         assert_eq!(size, obj1.size());
 
@@ -1649,8 +2007,11 @@ mod tests {
         let mut serializer = SOMSerializer::new(&mut buffer[..]);
         assert_eq!(size, obj1.serialize(&mut serializer).unwrap());
         assert_eq!(buffer, data);
+    }
 
-        let mut parser = SOMParser::new(&buffer[..]);
+    fn parse<T: SOMType>(obj2: &mut T, data: &[u8]) {
+        let mut parser = SOMParser::new(data);
+        let size = data.len();
         assert_eq!(size, obj2.parse(&mut parser).unwrap());
         assert_eq!(size, obj2.size());
     }
@@ -2839,6 +3200,413 @@ mod tests {
 
             obj1.add(String::from("B"), 23u8);
             assert_eq!(1, obj1.len());
+        }
+    }
+
+    #[test]
+    fn test_som_string() {
+        // empty strings
+        {
+            let obj1 = SOMString::fixed(SOMStringEncoding::Utf8, SOMStringFormat::Plain, 0);
+            assert!(!obj1.is_dynamic());
+            assert_eq!(0, obj1.len());
+            assert_eq!(0, obj1.size());
+
+            let obj2 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::Plain,
+                0,
+                3,
+            );
+            assert!(obj2.is_dynamic());
+            assert_eq!(0, obj2.len());
+            assert_eq!(4, obj2.size());
+
+            let obj3 = SOMString::fixed(
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::WithBOMandTermination,
+                4,
+            );
+            assert!(!obj3.is_dynamic());
+            assert_eq!(4, obj3.len());
+            assert_eq!(4, obj3.size());
+
+            let obj4 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::WithBOMandTermination,
+                4,
+                7,
+            );
+            assert!(obj4.is_dynamic());
+            assert_eq!(4, obj4.len());
+            assert_eq!(8, obj4.size());
+
+            let obj5 = SOMString::fixed(SOMStringEncoding::Utf16Be, SOMStringFormat::Plain, 0);
+            assert!(!obj5.is_dynamic());
+            assert_eq!(0, obj5.len());
+            assert_eq!(0, obj5.size());
+
+            let obj6 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::Plain,
+                0,
+                3,
+            );
+            assert!(obj6.is_dynamic());
+            assert_eq!(0, obj6.len());
+            assert_eq!(4, obj6.size());
+
+            let obj7 = SOMString::fixed(
+                SOMStringEncoding::Utf16Le,
+                SOMStringFormat::WithBOMandTermination,
+                5,
+            );
+            assert!(!obj7.is_dynamic());
+            assert_eq!(2, obj7.len());
+            assert_eq!(4 + 6, obj7.size());
+
+            let obj8 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf16Le,
+                SOMStringFormat::WithBOMandTermination,
+                2,
+                5,
+            );
+            assert!(obj8.is_dynamic());
+            assert_eq!(2, obj8.len());
+            assert_eq!(8, obj8.size());
+        }
+
+        // fixed utf8 string without bom and termination
+        {
+            let mut obj1 = SOMString::fixed(SOMStringEncoding::Utf8, SOMStringFormat::Plain, 3);
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(3, obj1.len());
+            assert_eq!(3, obj1.size());
+
+            let mut obj2 = SOMString::fixed(SOMStringEncoding::Utf8, SOMStringFormat::Plain, 3);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x66, 0x6F, 0x6F, // Content
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(3, obj2.len());
+            assert_eq!(3, obj2.size());
+
+            serialize_fail(
+                &obj2,
+                &mut [0u8; 0],
+                "Serializer exausted at offset: 0 for Object size: 1",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 0],
+                "Parser exausted at offset: 0 for Object size: 1",
+            );
+        }
+
+        // fixed utf8 string with bom and termination
+        {
+            let mut obj1 = SOMString::fixed(
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::WithBOMandTermination,
+                7,
+            );
+            assert_eq!(3 + 1, obj1.len());
+            assert_eq!(3 + 3 + 1, obj1.size());
+
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(3 + 3 + 1, obj1.len());
+            assert_eq!(3 + 3 + 1, obj1.size());
+
+            let mut obj2 = SOMString::fixed(
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::WithBOMandTermination,
+                7,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0xEF, 0xBB, 0xBF, // BOM
+                    0x66, 0x6F, 0x6F, // Content
+                    0x00, // Termination
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(3 + 3 + 1, obj2.len());
+            assert_eq!(3 + 3 + 1, obj2.size());
+        }
+
+        // fixed utf16-be string with bom and termination
+        {
+            let mut obj1 = SOMString::fixed(
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::WithBOMandTermination,
+                5,
+            );
+            assert_eq!(1 + 1, obj1.len());
+            assert_eq!((1 + 3 + 1) * 2, obj1.size());
+
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(1 + 3 + 1, obj1.len());
+            assert_eq!((1 + 3 + 1) * 2, obj1.size());
+
+            let mut obj2 = SOMString::fixed(
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::WithBOMandTermination,
+                5,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0xFE, 0xFF, // BOM
+                    0x00, 0x66, 0x00, 0x6F, 0x00, 0x6F, // Content
+                    0x00, 0x00, // Termination
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(1 + 3 + 1, obj2.len());
+            assert_eq!((1 + 3 + 1) * 2, obj2.size());
+        }
+
+        // incomplete fixed utf16-le string with termination only
+        {
+            let mut obj1 = SOMString::fixed(
+                SOMStringEncoding::Utf16Le,
+                SOMStringFormat::WithTermination,
+                10,
+            );
+            assert_eq!(1, obj1.len());
+            assert_eq!((9 + 1) * 2, obj1.size());
+
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(3 + 1, obj1.len());
+            assert_eq!((3 + 6 + 1) * 2, obj1.size());
+
+            let mut obj2 = SOMString::fixed(
+                SOMStringEncoding::Utf16Le,
+                SOMStringFormat::WithTermination,
+                10,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x66, 0x00, 0x6F, 0x00, 0x6F, 0x00, // Content
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, // Filler
+                    0x00, 0x00, // Termination
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(3 + 1, obj2.len());
+            assert_eq!((3 + 6 + 1) * 2, obj2.size());
+        }
+
+        // dynamic utf8 string without bom and termination
+        {
+            let mut obj1 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::Plain,
+                0,
+                3,
+            );
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(3, obj1.len());
+            assert_eq!(4 + 3, obj1.size());
+
+            let mut obj2 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::Plain,
+                0,
+                3,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x03, // Length-Field (U32)
+                    0x66, 0x6F, 0x6F, // Content
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(3, obj2.len());
+            assert_eq!(4 + 3, obj2.size());
+
+            serialize_fail(
+                &obj2,
+                &mut [0u8; 0],
+                "Serializer exausted at offset: 0 for Object size: 4",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 0],
+                "Parser exausted at offset: 0 for Object size: 4",
+            );
+        }
+
+        // dynamic utf8 string with bom and termination
+        {
+            let mut obj1 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::WithBOMandTermination,
+                4,
+                7,
+            );
+            assert_eq!(3 + 1, obj1.len());
+            assert_eq!(4 + 3 + 1, obj1.size());
+
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(3 + 3 + 1, obj1.len());
+            assert_eq!(4 + 3 + 3 + 1, obj1.size());
+
+            let mut obj2 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::WithBOMandTermination,
+                4,
+                7,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x07, // Length-Field (U32)
+                    0xEF, 0xBB, 0xBF, // BOM
+                    0x66, 0x6F, 0x6F, // Content
+                    0x00, // Termination
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(3 + 3 + 1, obj2.len());
+            assert_eq!(4 + 3 + 3 + 1, obj2.size());
+        }
+
+        // dynamic utf16-be string with bom and termination
+        {
+            let mut obj1 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::WithBOMandTermination,
+                2,
+                5,
+            );
+            assert_eq!(1 + 1, obj1.len());
+            assert_eq!(4 + (1 + 1) * 2, obj1.size());
+
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(1 + 3 + 1, obj1.len());
+            assert_eq!(4 + (1 + 3 + 1) * 2, obj1.size());
+
+            let mut obj2 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::WithBOMandTermination,
+                2,
+                5,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x0A, // Length-Field (U32)
+                    0xFE, 0xFF, // BOM
+                    0x00, 0x66, 0x00, 0x6F, 0x00, 0x6F, // Content
+                    0x00, 0x00, // Termination
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(1 + 3 + 1, obj2.len());
+            assert_eq!(4 + (1 + 3 + 1) * 2, obj2.size());
+        }
+
+        // incomplete dynamic utf16-le string with bom only
+        {
+            let mut obj1 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf16Le,
+                SOMStringFormat::WithBOM,
+                0,
+                10,
+            );
+            assert_eq!(1, obj1.len());
+            assert_eq!(4 + 1 * 2, obj1.size());
+
+            assert!(obj1.set(String::from("foo")));
+            assert_eq!(1 + 3, obj1.len());
+            assert_eq!(4 + (1 + 3) * 2, obj1.size());
+
+            let mut obj2 = SOMString::dynamic(
+                SOMLengthField::U32,
+                SOMStringEncoding::Utf16Le,
+                SOMStringFormat::WithBOM,
+                0,
+                10,
+            );
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x08, // Length-Field (U32)
+                    0xFF, 0xFE, // BOM
+                    0x66, 0x00, 0x6F, 0x00, 0x6F, 0x00, // Content
+                ],
+            );
+
+            assert_eq!(String::from("foo"), obj2.get());
+            assert_eq!(1 + 3, obj2.len());
+            assert_eq!(4 + (1 + 3) * 2, obj2.size());
+        }
+
+        // incomplete length
+        {
+            let mut obj1 = SOMString::fixed(SOMStringEncoding::Utf8, SOMStringFormat::Plain, 3);
+            assert!(!obj1.set(String::from("foobar")));
+            assert_eq!(0, obj1.len());
+            assert_eq!(3, obj1.size());
+            assert!(obj1.set(String::from("f")));
+            assert_eq!(1, obj1.len());
+            assert_eq!(3, obj1.size());
+
+            serialize(&obj1, &mut [0x66, 0x00, 0x00]);
+
+            let mut obj2 = SOMString::dynamic(
+                SOMLengthField::U8,
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::Plain,
+                2,
+                3,
+            );
+            assert!(!obj2.set(String::from("foobar")));
+            assert_eq!(0, obj2.len());
+            assert_eq!(1, obj2.size());
+            assert!(obj2.set(String::from("f")));
+            assert_eq!(1, obj2.len());
+            assert_eq!(1 + 1, obj2.size());
+
+            serialize_fail(
+                &obj2,
+                &mut [0u8; 2],
+                "Invalid String length: 1 at offset: 0",
+            );
         }
     }
 }
