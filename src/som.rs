@@ -4,10 +4,20 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use std::any::Any;
 use ux::{i24, u24};
 
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum SOMTypeInfo {
+    FixedLength,
+    ImplicitLength,
+    ExplicitLength,
+}
+
 pub trait SOMType {
     fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError>;
     fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError>;
     fn size(&self) -> usize;
+    fn info(&self) -> SOMTypeInfo {
+        SOMTypeInfo::FixedLength
+    }
 }
 
 #[derive(Debug)]
@@ -333,6 +343,12 @@ impl<'a> SOMParser<'a> {
 
     fn offset(&self) -> usize {
         self.offset
+    }
+
+    fn skip(&mut self, size: usize) -> Result<usize, SOMError> {
+        self.check_size(size)?;
+        self.offset += size;
+        Ok(size)
     }
 
     fn read_lengthfield(&mut self, lengthfield: SOMLengthField) -> Result<usize, SOMError> {
@@ -1125,6 +1141,14 @@ mod arrays {
 
             size
         }
+
+        fn info(&self) -> SOMTypeInfo {
+            if self.is_dynamic() {
+                SOMTypeInfo::ExplicitLength
+            } else {
+                SOMTypeInfo::ImplicitLength
+            }
+        }
     }
 }
 
@@ -1207,6 +1231,10 @@ mod structs {
 
             size
         }
+
+        fn info(&self) -> SOMTypeInfo {
+            SOMTypeInfo::ImplicitLength
+        }
     }
 }
 
@@ -1232,12 +1260,12 @@ mod unions {
             }
         }
 
-        pub fn add(&mut self, obj: T) {
-            self.variants.push(obj);
-        }
-
         pub fn len(&self) -> usize {
             self.variants.len()
+        }
+
+        pub fn add(&mut self, obj: T) {
+            self.variants.push(obj);
         }
 
         pub fn has_value(&self) -> bool {
@@ -1317,6 +1345,10 @@ mod unions {
 
             size
         }
+
+        fn info(&self) -> SOMTypeInfo {
+            SOMTypeInfo::ImplicitLength
+        }
     }
 }
 
@@ -1327,9 +1359,15 @@ mod enums {
     use super::*;
 
     #[derive(Debug)]
+    struct SOMEnumTypeItem<T> {
+        key: String,
+        value: T,
+    }
+
+    #[derive(Debug)]
     pub struct SOMEnumType<T> {
         endian: SOMEndian,
-        variants: Vec<(String, T)>,
+        variants: Vec<SOMEnumTypeItem<T>>,
         index: usize,
     }
 
@@ -1337,23 +1375,23 @@ mod enums {
         pub fn new(endian: SOMEndian) -> SOMEnumType<T> {
             SOMEnumType {
                 endian,
-                variants: Vec::<(String, T)>::new(),
+                variants: Vec::<SOMEnumTypeItem<T>>::new(),
                 index: 0,
             }
         }
 
+        pub fn len(&self) -> usize {
+            self.variants.len()
+        }
+
         pub fn add(&mut self, key: String, value: T) {
             for variant in &self.variants {
-                if (variant.0 == key) || (variant.1 == value) {
+                if (variant.key == key) || (variant.value == value) {
                     return;
                 }
             }
 
-            self.variants.push((key, value));
-        }
-
-        pub fn len(&self) -> usize {
-            self.variants.len()
+            self.variants.push(SOMEnumTypeItem { key, value });
         }
 
         pub fn has_value(&self) -> bool {
@@ -1362,8 +1400,8 @@ mod enums {
 
         pub fn get(&self) -> Option<T> {
             if self.has_value() {
-                let (_, value) = self.variants.get(self.index - 1).unwrap();
-                Some(*value)
+                let variant = self.variants.get(self.index - 1).unwrap();
+                Some(variant.value)
             } else {
                 None
             }
@@ -1373,7 +1411,7 @@ mod enums {
             let mut index: usize = 0;
             for variant in &self.variants {
                 index += 1;
-                if variant.0 == key {
+                if variant.key == key {
                     self.index = index;
                     return true;
                 }
@@ -1386,7 +1424,7 @@ mod enums {
             let mut index: usize = 0;
             for variant in &self.variants {
                 index += 1;
-                if variant.1 == value {
+                if variant.value == value {
                     self.index = index;
                     return true;
                 }
@@ -1915,12 +1953,281 @@ mod strings {
 
             size
         }
+
+        fn info(&self) -> SOMTypeInfo {
+            if self.is_dynamic() {
+                SOMTypeInfo::ExplicitLength
+            } else {
+                SOMTypeInfo::ImplicitLength
+            }
+        }
     }
 }
 
 pub type SOMStringEncoding = strings::SOMStringEncoding;
 pub type SOMStringFormat = strings::SOMStringFormat;
 pub type SOMString = strings::SOMStringType;
+
+mod optionals {
+    use super::*;
+
+    const TAG_MASK: u16 = 0x7FFF;
+
+    fn wire_type<T: SOMType>(value: &T) -> Option<usize> {
+        match value.info() {
+            SOMTypeInfo::FixedLength => match value.size() {
+                1 => Some(0),
+                2 => Some(1),
+                4 => Some(2),
+                8 => Some(3),
+                _ => None,
+            },
+            _ => Some(4),
+        }
+    }
+
+    fn wire_size(wiretype: usize) -> Option<usize> {
+        match wiretype {
+            0 => Some(1),
+            1 => Some(2),
+            2 => Some(4),
+            3 => Some(8),
+            _ => None,
+        }
+    }
+
+    #[derive(Debug)]
+    struct SOMOptionalTypeItem<T: SOMType> {
+        wiretype: usize,
+        key: usize,
+        value: T,
+        mandatory: bool,
+        set: bool,
+    }
+
+    impl<T: SOMType> SOMOptionalTypeItem<T> {
+        fn tag(&self) -> u16 {
+            TAG_MASK & (((self.wiretype as u16) << 12) | ((self.key as u16) & 0x0FFF))
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct SOMOptionalType<T: SOMType> {
+        lengthfield: SOMLengthField,
+        members: Vec<SOMOptionalTypeItem<T>>,
+    }
+
+    impl<T: SOMType> SOMOptionalType<T> {
+        pub fn new(lengthfield: SOMLengthField) -> SOMOptionalType<T> {
+            SOMOptionalType {
+                lengthfield,
+                members: Vec::<SOMOptionalTypeItem<T>>::new(),
+            }
+        }
+
+        pub fn len(&self) -> usize {
+            self.members.len()
+        }
+
+        pub fn add(&mut self, key: usize, value: T, mandatory: bool) {
+            for member in &self.members {
+                if member.key == key {
+                    return;
+                }
+            }
+
+            if let Some(wiretype) = wire_type(&value) {
+                self.members.push(SOMOptionalTypeItem {
+                    wiretype,
+                    key,
+                    value,
+                    mandatory,
+                    set: false,
+                });
+            }
+        }
+
+        pub fn is_mandatory(&self, key: usize) -> bool {
+            for member in &self.members {
+                if (member.key == key) && member.mandatory {
+                    return true;
+                }
+            }
+
+            false
+        }
+
+        pub fn is_set(&self, key: usize) -> bool {
+            for member in &self.members {
+                if (member.key == key) && member.set {
+                    return true;
+                }
+            }
+
+            false
+        }
+
+        pub fn get(&self, key: usize) -> Option<&T> {
+            for member in &self.members {
+                if (member.key == key) && member.set {
+                    return Some(&member.value);
+                }
+            }
+
+            None
+        }
+
+        pub fn get_mut(&mut self, key: usize) -> Option<&mut T> {
+            for member in &mut self.members {
+                if member.key == key {
+                    member.set = true;
+                    return Some(&mut member.value);
+                }
+            }
+
+            None
+        }
+
+        pub fn clear(&mut self) {
+            for member in &mut self.members {
+                member.set = false;
+            }
+        }
+    }
+
+    impl<T: SOMType + Any> SOMTypeWithLengthField for SOMOptionalType<T> {
+        fn lengthfield(&self) -> SOMLengthField {
+            self.lengthfield
+        }
+    }
+
+    impl<T: SOMType + Any> SOMType for SOMOptionalType<T> {
+        fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
+            let offset = serializer.offset();
+
+            let type_lengthfield = serializer.promise(self.lengthfield.size())?;
+
+            for member in &self.members {
+                if member.set {
+                    serializer.write_u16(member.tag(), SOMEndian::Big)?;
+                    if member.value.info() == SOMTypeInfo::ImplicitLength {
+                        let member_lengthfield = serializer.promise(self.lengthfield.size())?;
+                        let member_start = serializer.offset();
+                        member.value.serialize(serializer)?;
+                        serializer.write_lengthfield(
+                            member_lengthfield,
+                            self.lengthfield,
+                            serializer.offset() - member_start,
+                        )?;
+                    } else {
+                        member.value.serialize(serializer)?;
+                    }
+                } else if member.mandatory {
+                    return Err(SOMError::InvalidType(format!(
+                        "Uninitialized mandatory member: {} at offset: {}",
+                        member.key, offset
+                    )));
+                }
+            }
+
+            let size = serializer.offset() - offset;
+            serializer.write_lengthfield(
+                type_lengthfield,
+                self.lengthfield,
+                size - self.lengthfield.size(),
+            )?;
+
+            Ok(size)
+        }
+
+        fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
+            let offset = parser.offset();
+
+            let type_lengthfield = parser.read_lengthfield(self.lengthfield)?;
+            let type_start = parser.offset();
+
+            self.clear();
+            while (parser.offset() - type_start) < type_lengthfield {
+                let tag: u16 = parser.read_u16(SOMEndian::Big)? & TAG_MASK;
+                let mut found: bool = false;
+                for member in &mut self.members {
+                    if !member.set && member.tag() == tag {
+                        if member.value.info() == SOMTypeInfo::ImplicitLength {
+                            let member_lengthfield = parser.read_lengthfield(self.lengthfield)?;
+                            let member_start = parser.offset();
+                            member.value.parse(parser)?;
+                            if parser.offset() != (member_start + member_lengthfield) {
+                                return Err(SOMError::InvalidPayload(format!(
+                                    "Invalid Length-Field value: {} at offset: {}",
+                                    member_lengthfield, member_start
+                                )));
+                            }
+                        } else {
+                            member.value.parse(parser)?;
+                        }
+                        member.set = true;
+                        found = true;
+                        break;
+                    }
+                }
+
+                if !found {
+                    let wiretype: usize = ((tag >> 8) & 0xFF) as usize;
+                    let wiresize: Option<usize> = wire_size(wiretype);
+                    if wiresize.is_some() {
+                        parser.skip(wiresize.unwrap())?;
+                    } else {
+                        let skip = parser.read_lengthfield(self.lengthfield)?;
+                        parser.skip(skip)?;
+                    }
+                }
+            }
+
+            for member in &mut self.members {
+                if member.mandatory && !member.set {
+                    return Err(SOMError::InvalidPayload(format!(
+                        "Uninitialized mandatory member: : {} at offset: {}",
+                        member.key, offset
+                    )));
+                }
+            }
+
+            let size = parser.offset() - offset;
+            if type_lengthfield != (size - self.lengthfield.size()) {
+                return Err(SOMError::InvalidPayload(format!(
+                    "Invalid Length-Field value: {} at offset: {}",
+                    type_lengthfield, offset
+                )));
+            }
+
+            Ok(size)
+        }
+
+        fn size(&self) -> usize {
+            let mut size: usize = 0;
+
+            size += self.lengthfield.size();
+            for member in &self.members {
+                if member.set {
+                    size += std::mem::size_of::<u16>(); // tag
+                    if member.value.info() == SOMTypeInfo::ImplicitLength {
+                        size += self.lengthfield.size();
+                    }
+                    size += member.value.size();
+                }
+            }
+
+            size
+        }
+
+        fn info(&self) -> SOMTypeInfo {
+            SOMTypeInfo::ExplicitLength
+        }
+    }
+}
+
+pub type SOMOptionalMember = wrapper::SOMTypeWrapper;
+pub type SOMOptional = optionals::SOMOptionalType<SOMOptionalMember>;
 
 mod wrapper {
     use super::*;
@@ -1948,6 +2255,12 @@ mod wrapper {
                         $(SOMTypeWrapper::$value(obj) => obj.size(),)*
                     }
                 }
+
+                fn info(&self) -> SOMTypeInfo {
+                    match self {
+                        $(SOMTypeWrapper::$value(obj) => obj.info(),)*
+                    }
+                }
             }
         };
     }
@@ -1966,8 +2279,10 @@ mod wrapper {
         I64(SOMi64),
         F32(SOMf32),
         F64(SOMf64),
-        Struct(SOMStruct),
-        Union(SOMUnion),
+        EnumU8(SOMu8Enum),
+        EnumU16(SOMu16Enum),
+        EnumU32(SOMu32Enum),
+        EnumU64(SOMu64Enum),
         Array(SOMArray),
         ArrayBool(SOMBoolArray),
         ArrayU8(SOMu8Array),
@@ -1982,11 +2297,10 @@ mod wrapper {
         ArrayI64(SOMi64Array),
         ArrayF23(SOMf32Array),
         ArrayF64(SOMf64Array),
-        EnumU8(SOMu8Enum),
-        EnumU16(SOMu16Enum),
-        EnumU32(SOMu32Enum),
-        EnumU64(SOMu64Enum),
+        Struct(SOMStruct),
+        Union(SOMUnion),
         String(SOMString),
+        Optional(SOMOptional),
     ]);
 }
 
@@ -2782,6 +3096,126 @@ mod tests {
                 &[0u8; 0],
                 "Parser exausted at offset: 0 for Object size: 2",
             );
+        }
+
+        // struct with string
+        {
+            let mut obj1 = SOMStruct::new();
+            obj1.add(SOMStructMember::String(SOMString::fixed(
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::Plain,
+                3,
+            )));
+            obj1.add(SOMStructMember::String(SOMString::dynamic(
+                SOMLengthField::U8,
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::Plain,
+                1,
+                3,
+            )));
+            assert_eq!(2, obj1.len());
+
+            if let Some(SOMStructMember::String(sub)) = obj1.get_mut(0) {
+                sub.set(String::from("foo"));
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMStructMember::String(sub)) = obj1.get_mut(1) {
+                sub.set(String::from("bar"));
+            } else {
+                panic!();
+            }
+
+            let mut obj2 = SOMStruct::new();
+            obj2.add(SOMStructMember::String(SOMString::fixed(
+                SOMStringEncoding::Utf8,
+                SOMStringFormat::Plain,
+                3,
+            )));
+            obj2.add(SOMStructMember::String(SOMString::dynamic(
+                SOMLengthField::U8,
+                SOMStringEncoding::Utf16Be,
+                SOMStringFormat::Plain,
+                1,
+                3,
+            )));
+
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x66, 0x6F, 0x6F, // String-Memeber (UTF8)
+                    0x06, // Lenght-Field (U8)
+                    0x00, 0x62, 0x00, 0x61, 0x00, 0x72, // String-Memeber (UTF16)
+                ],
+            );
+            assert_eq!(2, obj2.len());
+
+            if let Some(SOMStructMember::String(sub)) = obj2.get(0) {
+                assert_eq!(String::from("foo"), sub.get());
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMStructMember::String(sub)) = obj2.get(1) {
+                assert_eq!(String::from("bar"), sub.get());
+            } else {
+                panic!();
+            }
+        }
+
+        // struct with optional
+        {
+            let mut sub1 = SOMOptional::new(SOMLengthField::U32);
+            sub1.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+            assert_eq!(1, sub1.len());
+
+            if let Some(SOMOptionalMember::Bool(sub)) = sub1.get_mut(1) {
+                sub.set(true);
+            } else {
+                panic!();
+            }
+
+            let mut obj1 = SOMStruct::new();
+            obj1.add(SOMStructMember::Optional(sub1));
+            assert_eq!(1, obj1.len());
+
+            let mut sub2 = SOMOptional::new(SOMLengthField::U32);
+            sub2.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+
+            let mut obj2 = SOMStruct::new();
+            obj2.add(SOMStructMember::Optional(sub2));
+
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x03, // Lenght-Field (U32)
+                    0x00, 0x01, // TLV-Tag (U16)
+                    0x01, // Bool-Member
+                ],
+            );
+            assert_eq!(1, obj2.len());
+
+            if let Some(SOMStructMember::Optional(sub)) = obj2.get(0) {
+                assert_eq!(1, sub.len());
+                if let Some(SOMStructMember::Bool(subsub)) = sub.get(1) {
+                    assert!(subsub.get().unwrap());
+                } else {
+                    panic!();
+                }
+            } else {
+                panic!();
+            }
         }
     }
 
@@ -3606,6 +4040,247 @@ mod tests {
                 &obj2,
                 &mut [0u8; 2],
                 "Invalid String length: 1 at offset: 0",
+            );
+        }
+    }
+
+    #[test]
+    fn test_som_optional() {
+        // empty optional
+        {
+            let obj1 = SOMOptional::new(SOMLengthField::U32);
+            assert_eq!(0, obj1.len());
+
+            let mut obj2 = SOMOptional::new(SOMLengthField::U32);
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x00, // Length-Field (U32)
+                ],
+            );
+            assert_eq!(0, obj2.len());
+        }
+
+        // simple optional
+        {
+            let mut obj1 = SOMOptional::new(SOMLengthField::U32);
+            obj1.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+            obj1.add(
+                2,
+                SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big)),
+                false,
+            );
+            assert_eq!(2, obj1.len());
+
+            if let Some(SOMUnionMember::Bool(sub)) = obj1.get_mut(1) {
+                sub.set(true);
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMUnionMember::U16(sub)) = obj1.get_mut(2) {
+                sub.set(49200u16);
+            } else {
+                panic!();
+            }
+
+            let mut obj2 = SOMOptional::new(SOMLengthField::U32);
+            obj2.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+            obj2.add(
+                2,
+                SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big)),
+                false,
+            );
+
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x07, // Length-Field (U32)
+                    0x00, 0x01, // TLV-Tag (U16)
+                    0x01, // Bool-Memeber
+                    0x10, 0x02, // TLV-Tag (U16)
+                    0xC0, 0x30, // U16-Member
+                ],
+            );
+            assert_eq!(2, obj2.len());
+
+            if let Some(SOMStructMember::Bool(sub)) = obj2.get(1) {
+                assert_eq!(true, sub.get().unwrap());
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMStructMember::U16(sub)) = obj2.get(2) {
+                assert_eq!(49200u16, sub.get().unwrap());
+            } else {
+                panic!();
+            }
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 0],
+                "Serializer exausted at offset: 0 for Object size: 4",
+            );
+            parse_fail(
+                &mut obj2,
+                &[0u8; 0],
+                "Parser exausted at offset: 0 for Object size: 4",
+            );
+        }
+
+        // complex optional
+        {
+            let sub11 = SOMString::fixed(SOMStringEncoding::Utf8, SOMStringFormat::Plain, 3);
+            let sub12 = SOMu16Array::dynamic(SOMLengthField::U8, 1, 3);
+            let mut obj1 = SOMOptional::new(SOMLengthField::U32);
+            obj1.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+            obj1.add(2, SOMOptionalMember::String(sub11), true);
+            obj1.add(3, SOMOptionalMember::ArrayU16(sub12), false);
+            assert_eq!(3, obj1.len());
+
+            if let Some(SOMUnionMember::Bool(sub)) = obj1.get_mut(1) {
+                sub.set(true);
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMUnionMember::String(sub)) = obj1.get_mut(2) {
+                sub.set(String::from("foo"));
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMUnionMember::ArrayU16(sub)) = obj1.get_mut(3) {
+                for i in 0..3 {
+                    sub.add(SOMu16::new(SOMEndian::Big, (i + 1) as u16));
+                }
+            } else {
+                panic!();
+            }
+
+            let sub21 = SOMString::fixed(SOMStringEncoding::Utf8, SOMStringFormat::Plain, 3);
+            let sub22 = SOMu16Array::dynamic(SOMLengthField::U8, 1, 3);
+            let mut obj2 = SOMOptional::new(SOMLengthField::U32);
+            obj2.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+            obj2.add(2, SOMOptionalMember::String(sub21), true);
+            obj2.add(3, SOMOptionalMember::ArrayU16(sub22), false);
+            assert_eq!(3, obj2.len());
+
+            if let Some(SOMUnionMember::ArrayU16(sub)) = obj2.get_mut(3) {
+                for _ in 0..3 {
+                    sub.add(SOMu16::empty(SOMEndian::Big));
+                }
+            } else {
+                panic!();
+            }
+
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x15, // Length-Field (U32)
+                    0x00, 0x01, // TLV-Tag (U16)
+                    0x01, // Bool-Memeber
+                    0x40, 0x02, // TLV-Tag (U16)
+                    0x00, 0x00, 0x00, 0x03, // Length-Field (U32)
+                    0x66, 0x6F, 0x6F, // String-Member
+                    0x40, 0x03, // TLV-Tag (U16)
+                    0x06, // Length-Field (U8)
+                    0x00, 0x01, // Array-Mamber (U16)
+                    0x00, 0x02, // Array-Mamber (U16)
+                    0x00, 0x03, // Array-Mamber (U16)
+                ],
+            );
+            assert_eq!(3, obj2.len());
+
+            if let Some(SOMStructMember::Bool(sub)) = obj2.get(1) {
+                assert_eq!(true, sub.get().unwrap());
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMStructMember::String(sub)) = obj2.get(2) {
+                assert_eq!(String::from("foo"), sub.get());
+            } else {
+                panic!();
+            }
+
+            if let Some(SOMStructMember::ArrayU16(sub)) = obj2.get(3) {
+                assert_eq!(3, sub.len());
+                for i in 0..3 {
+                    assert_eq!((i + 1) as u16, sub.get(i).unwrap().get().unwrap());
+                }
+            } else {
+                panic!();
+            }
+        }
+
+        // missing mandatory
+        {
+            let mut obj1 = SOMOptional::new(SOMLengthField::U32);
+            obj1.add(
+                1,
+                SOMOptionalMember::Bool(SOMBool::empty(SOMEndian::Big)),
+                true,
+            );
+            obj1.add(
+                2,
+                SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big)),
+                true,
+            );
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 11],
+                "Uninitialized mandatory member: 1 at offset: 0",
+            );
+
+            if let Some(SOMUnionMember::Bool(sub)) = obj1.get_mut(1) {
+                sub.set(true);
+            } else {
+                panic!();
+            }
+
+            serialize_fail(
+                &obj1,
+                &mut [0u8; 11],
+                "Uninitialized mandatory member: 2 at offset: 0",
+            );
+
+            parse_fail(
+                &mut obj1,
+                &[
+                    0x00, 0x00, 0x00, 0x00, // Length-Field (U32)
+                ],
+                "Uninitialized mandatory member: : 1 at offset: 0",
+            );
+
+            parse_fail(
+                &mut obj1,
+                &[
+                    0x00, 0x00, 0x00, 0x03, // Length-Field (U32)
+                    0x00, 0x01, // TLV-Tag (U16)
+                    0x01, // Bool-Memeber
+                ],
+                "Uninitialized mandatory member: : 2 at offset: 0",
             );
         }
     }
