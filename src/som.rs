@@ -1,15 +1,8 @@
-// wip: someip types
+// someip types
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use std::any::Any;
 use ux::{i24, u24};
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum SOMTypeInfo {
-    FixedLength,
-    ImplicitLength,
-    ExplicitLength,
-}
 
 pub trait SOMType {
     fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError>;
@@ -28,13 +21,16 @@ pub enum SOMError {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub enum SOMTypeInfo {
+    FixedLength,
+    ImplicitLength,
+    ExplicitLength,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum SOMEndian {
     Big,
     Little,
-}
-
-pub trait SOMTypeWithEndian {
-    fn endian(&self) -> SOMEndian;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -56,10 +52,6 @@ impl SOMLengthField {
     }
 }
 
-pub trait SOMTypeWithLengthField {
-    fn lengthfield(&self) -> SOMLengthField;
-}
-
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum SOMTypeField {
     U8,
@@ -75,10 +67,6 @@ impl SOMTypeField {
             SOMTypeField::U32 => std::mem::size_of::<u32>(),
         }
     }
-}
-
-pub trait SOMTypeWithTypeField {
-    fn typefield(&self) -> SOMTypeField;
 }
 
 pub struct SOMSerializer<'a> {
@@ -593,12 +581,6 @@ mod primitives {
         }
     }
 
-    impl<T> SOMTypeWithEndian for SOMPrimitiveType<T> {
-        fn endian(&self) -> SOMEndian {
-            self.endian
-        }
-    }
-
     impl SOMType for SOMPrimitiveType<bool> {
         fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
             let offset = serializer.offset();
@@ -694,7 +676,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_u16(value, self.endian())?,
+                Some(value) => serializer.write_u16(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -709,7 +691,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_u16(self.endian())?);
+            self.value = Some(parser.read_u16(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -724,7 +706,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_i16(value, self.endian())?,
+                Some(value) => serializer.write_i16(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -739,7 +721,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_i16(self.endian())?);
+            self.value = Some(parser.read_i16(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -754,7 +736,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_u24(value, self.endian())?,
+                Some(value) => serializer.write_u24(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -769,7 +751,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_u24(self.endian())?);
+            self.value = Some(parser.read_u24(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -784,7 +766,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_i24(value, self.endian())?,
+                Some(value) => serializer.write_i24(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -799,7 +781,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_i24(self.endian())?);
+            self.value = Some(parser.read_i24(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -814,7 +796,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_u32(value, self.endian())?,
+                Some(value) => serializer.write_u32(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -829,7 +811,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_u32(self.endian())?);
+            self.value = Some(parser.read_u32(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -844,7 +826,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_i32(value, self.endian())?,
+                Some(value) => serializer.write_i32(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -859,7 +841,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_i32(self.endian())?);
+            self.value = Some(parser.read_i32(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -874,7 +856,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_u64(value, self.endian())?,
+                Some(value) => serializer.write_u64(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -889,7 +871,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_u64(self.endian())?);
+            self.value = Some(parser.read_u64(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -904,7 +886,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_i64(value, self.endian())?,
+                Some(value) => serializer.write_i64(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -919,7 +901,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_i64(self.endian())?);
+            self.value = Some(parser.read_i64(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -934,7 +916,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_f32(value, self.endian())?,
+                Some(value) => serializer.write_f32(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -949,7 +931,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_f32(self.endian())?);
+            self.value = Some(parser.read_f32(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -964,7 +946,7 @@ mod primitives {
             let offset = serializer.offset();
 
             match self.value {
-                Some(value) => serializer.write_f64(value, self.endian())?,
+                Some(value) => serializer.write_f64(value, self.endian)?,
                 None => {
                     return Err(SOMError::InvalidType(format!(
                         "Uninitialized Type at offset: {}",
@@ -979,7 +961,7 @@ mod primitives {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            self.value = Some(parser.read_f64(self.endian())?);
+            self.value = Some(parser.read_f64(self.endian)?);
 
             Ok(parser.offset() - offset)
         }
@@ -1078,12 +1060,6 @@ mod arrays {
             }
 
             Ok(())
-        }
-    }
-
-    impl<T: SOMType + Any> SOMTypeWithLengthField for SOMArrayType<T> {
-        fn lengthfield(&self) -> SOMLengthField {
-            self.lengthfield
         }
     }
 
@@ -1294,12 +1270,6 @@ mod unions {
         }
     }
 
-    impl<T: SOMType + Any> SOMTypeWithTypeField for SOMUnionType<T> {
-        fn typefield(&self) -> SOMTypeField {
-            self.typefield
-        }
-    }
-
     impl<T: SOMType + Any> SOMType for SOMUnionType<T> {
         fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
             let offset = serializer.offset();
@@ -1435,12 +1405,6 @@ mod enums {
 
         pub fn clear(&mut self) {
             self.index = 0;
-        }
-    }
-
-    impl<T> SOMTypeWithEndian for SOMEnumType<T> {
-        fn endian(&self) -> SOMEndian {
-            self.endian
         }
     }
 
@@ -1760,6 +1724,14 @@ mod strings {
             &self.value
         }
 
+        fn endian(&self) -> SOMEndian {
+            match self.encoding {
+                SOMStringEncoding::Utf8 => SOMEndian::Big,
+                SOMStringEncoding::Utf16Be => SOMEndian::Big,
+                SOMStringEncoding::Utf16Le => SOMEndian::Little,
+            }
+        }
+
         fn check_length(&self, offset: usize) -> Result<(), SOMError> {
             let length: usize = self.len();
 
@@ -1778,22 +1750,6 @@ mod strings {
             }
 
             Ok(())
-        }
-    }
-
-    impl SOMTypeWithEndian for SOMStringType {
-        fn endian(&self) -> SOMEndian {
-            match self.encoding {
-                SOMStringEncoding::Utf8 => SOMEndian::Big,
-                SOMStringEncoding::Utf16Be => SOMEndian::Big,
-                SOMStringEncoding::Utf16Le => SOMEndian::Little,
-            }
-        }
-    }
-
-    impl SOMTypeWithLengthField for SOMStringType {
-        fn lengthfield(&self) -> SOMLengthField {
-            self.lengthfield
         }
     }
 
@@ -2095,12 +2051,6 @@ mod optionals {
         }
     }
 
-    impl<T: SOMType + Any> SOMTypeWithLengthField for SOMOptionalType<T> {
-        fn lengthfield(&self) -> SOMLengthField {
-            self.lengthfield
-        }
-    }
-
     impl<T: SOMType + Any> SOMType for SOMOptionalType<T> {
         fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMError> {
             let offset = serializer.offset();
@@ -2359,11 +2309,9 @@ mod tests {
         // generic
         {
             let obj = SOMu8::new(SOMEndian::Big, 1u8);
-            assert_eq!(SOMEndian::Big, obj.endian());
             assert_eq!(1u8, obj.get().unwrap());
 
             let mut obj = SOMu8::empty(SOMEndian::Little);
-            assert_eq!(SOMEndian::Little, obj.endian());
             assert_eq!(None, obj.get());
             obj.set(1u8);
             assert_eq!(1u8, obj.get().unwrap());
@@ -3526,7 +3474,6 @@ mod tests {
         // empty enum
         {
             let mut obj = SOMu8Enum::new(SOMEndian::Big);
-            assert_eq!(SOMEndian::Big, obj.endian());
             assert_eq!(0, obj.len());
             assert!(!obj.has_value());
             assert!(obj.get().is_none());
