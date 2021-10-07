@@ -1016,6 +1016,7 @@ mod arrays {
     pub struct SOMArrayType<T: SOMType + Any> {
         lengthfield: SOMLengthField,
         elements: Vec<T>,
+        length: usize,
         min: usize,
         max: usize,
     }
@@ -1025,6 +1026,7 @@ mod arrays {
             SOMArrayType {
                 lengthfield: SOMLengthField::None,
                 elements: Vec::<T>::new(),
+                length: 0usize,
                 min: size,
                 max: size,
             }
@@ -1034,6 +1036,7 @@ mod arrays {
             SOMArrayType {
                 lengthfield,
                 elements: Vec::<T>::new(),
+                length: 0usize,
                 min,
                 max,
             }
@@ -1044,7 +1047,7 @@ mod arrays {
         }
 
         pub fn len(&self) -> usize {
-            self.elements.len()
+            self.length
         }
 
         pub fn add(&mut self, obj: T) {
@@ -1063,18 +1066,32 @@ mod arrays {
                     }
                     None => obj,
                 });
-        }
-
-        pub fn remove(&mut self, index: usize) -> T {
-            self.elements.remove(index)
+            self.length += 1usize;
         }
 
         pub fn get(&self, index: usize) -> Option<&T> {
-            self.elements.get(index)
+            if index < self.length {
+                return self.elements.get(index);
+            }
+
+            None
+        }
+
+        pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+            if index < self.max {
+                self.length = index + 1usize;
+                return self.elements.get_mut(index);
+            }
+
+            None
+        }
+
+        pub fn clear(&mut self) {
+            self.length = 0;
         }
 
         fn check_length(&self, offset: usize) -> Result<(), SOMError> {
-            let length: usize = self.elements.len();
+            let length: usize = self.len();
             if (length < self.min) || (length > self.max) {
                 return Err(SOMError::InvalidType(format!(
                     "Invalid Array length: {} at offset: {}",
@@ -1091,16 +1108,17 @@ mod arrays {
             let offset = serializer.offset();
             self.check_length(offset)?;
 
-            let lengthfield_promise = serializer.promise(self.lengthfield.size())?;
+            let type_lengthfield = serializer.promise(self.lengthfield.size())?;
 
-            for element in &self.elements {
+            for i in 0..self.len() {
+                let element: &T = self.get(i).unwrap();
                 element.serialize(serializer)?;
             }
 
             let size = serializer.offset() - offset;
             if self.is_dynamic() {
                 serializer.write_lengthfield(
-                    lengthfield_promise,
+                    type_lengthfield,
                     self.lengthfield,
                     size - self.lengthfield.size(),
                 )?;
@@ -1113,17 +1131,28 @@ mod arrays {
             let offset = parser.offset();
             self.check_length(offset)?;
 
-            let lengthfield_value = parser.read_lengthfield(self.lengthfield)?;
+            let type_lengthfield = parser.read_lengthfield(self.lengthfield)?;
 
-            for element in &mut self.elements {
-                element.parse(parser)?;
+            self.clear();
+            if self.is_dynamic() {
+                let type_start = parser.offset();
+
+                while (parser.offset() - type_start) < type_lengthfield {
+                    let element: &mut T = self.get_mut(self.len()).unwrap();
+                    element.parse(parser)?;
+                }
+            } else {
+                for _ in 0..self.max {
+                    let element: &mut T = self.get_mut(self.len()).unwrap();
+                    element.parse(parser)?;
+                }
             }
 
             let size = parser.offset() - offset;
-            if self.is_dynamic() && (lengthfield_value != (size - self.lengthfield.size())) {
+            if self.is_dynamic() && (type_lengthfield != (size - self.lengthfield.size())) {
                 return Err(SOMError::InvalidPayload(format!(
                     "Invalid Length-Field value: {} at offset: {}",
-                    lengthfield_value, offset
+                    type_lengthfield, offset
                 )));
             }
 
@@ -1134,8 +1163,8 @@ mod arrays {
             let mut size: usize = 0;
 
             size += self.lengthfield.size();
-            for element in &self.elements {
-                size += element.size();
+            for i in 0..self.len() {
+                size += self.get(i).unwrap().size();
             }
 
             size
@@ -1822,7 +1851,7 @@ mod strings {
             let offset = serializer.offset();
             self.check_length(offset)?;
 
-            let lengthfield_promise = serializer.promise(self.lengthfield.size())?;
+            let type_lengthfield = serializer.promise(self.lengthfield.size())?;
 
             let char_size = char_size(self.encoding);
             let mut string_size = 0usize;
@@ -1862,7 +1891,7 @@ mod strings {
             if self.is_dynamic() {
                 size = serializer.offset() - offset;
                 serializer.write_lengthfield(
-                    lengthfield_promise,
+                    type_lengthfield,
                     self.lengthfield,
                     size - self.lengthfield.size(),
                 )?;
@@ -1881,10 +1910,10 @@ mod strings {
         fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMError> {
             let offset = parser.offset();
 
-            let lengthfield_value = parser.read_lengthfield(self.lengthfield)?;
+            let type_lengthfield = parser.read_lengthfield(self.lengthfield)?;
 
             let char_size = char_size(self.encoding);
-            let mut string_size = lengthfield_value;
+            let mut string_size = type_lengthfield;
 
             if !self.is_dynamic() {
                 string_size = char_size * self.max;
@@ -1950,10 +1979,10 @@ mod strings {
             }
 
             let size = parser.offset() - offset;
-            if self.is_dynamic() && (lengthfield_value != (size - self.lengthfield.size())) {
+            if self.is_dynamic() && (type_lengthfield != (size - self.lengthfield.size())) {
                 return Err(SOMError::InvalidPayload(format!(
                     "Invalid Length-Field value: {} at offset: {}",
-                    lengthfield_value, offset
+                    type_lengthfield, offset
                 )));
             }
 
@@ -3218,18 +3247,36 @@ mod tests {
 
     #[test]
     fn test_som_array() {
+        // empty array
+        {
+            let mut obj1 = SOMu8Array::fixed(3);
+            assert!(!obj1.is_dynamic());
+            assert_eq!(0, obj1.len());
+            obj1.add(SOMu8::empty());
+            assert_eq!(1, obj1.len());
+            obj1.clear();
+            assert_eq!(0, obj1.len());
+
+            let mut obj2 = SOMu8Array::dynamic(SOMLengthField::U8, 0, 3);
+            assert!(obj2.is_dynamic());
+            assert_eq!(0, obj2.len());
+            obj2.add(SOMu8::empty());
+            assert_eq!(1, obj2.len());
+            obj2.clear();
+            assert_eq!(0, obj2.len());
+        }
+
         // static array
         {
             let mut obj1 = SOMu16Array::fixed(3);
             let mut obj2 = SOMu16Array::fixed(3);
-            assert!(!obj1.is_dynamic());
-            assert_eq!(0, obj1.len());
 
             for i in 0..3 {
                 obj1.add(SOMu16::new(SOMEndian::Big, (i + 1) as u16));
                 obj2.add(SOMu16::empty(SOMEndian::Big));
             }
             assert_eq!(3, obj1.len());
+            assert_eq!(3, obj2.len());
 
             serialize_parse(
                 &obj1,
@@ -3262,14 +3309,13 @@ mod tests {
         {
             let mut obj1 = SOMu16Array::dynamic(SOMLengthField::U32, 0, 3);
             let mut obj2 = SOMu16Array::dynamic(SOMLengthField::U32, 0, 3);
-            assert!(obj1.is_dynamic());
-            assert_eq!(0, obj1.len());
 
             for i in 0..3 {
                 obj1.add(SOMu16::new(SOMEndian::Big, (i + 1) as u16));
                 obj2.add(SOMu16::empty(SOMEndian::Big));
             }
             assert_eq!(3, obj1.len());
+            assert_eq!(3, obj2.len());
 
             serialize_parse(
                 &obj1,
@@ -3305,9 +3351,34 @@ mod tests {
             );
             parse_fail(
                 &mut obj2,
-                &[0u8; 9],
-                "Parser exausted at offset: 8 for Object size: 2",
+                &[0x00, 0x00, 0x00, 0x01],
+                "Parser exausted at offset: 4 for Object size: 2",
             );
+        }
+
+        // incomplete dynamic array
+        {
+            let mut obj1 = SOMu16Array::dynamic(SOMLengthField::U32, 1, 3);
+            obj1.add(SOMu16::new(SOMEndian::Big, 1u16));
+            assert_eq!(1, obj1.len());
+
+            let mut obj2 = SOMu16Array::dynamic(SOMLengthField::U32, 1, 3);
+            for _ in 0..3 {
+                obj2.add(SOMu16::empty(SOMEndian::Big));
+            }
+            assert_eq!(3, obj2.len());
+
+            serialize_parse(
+                &obj1,
+                &mut obj2,
+                &[
+                    0x00, 0x00, 0x00, 0x02, // Length-Field (U32)
+                    0x00, 0x01, // Array-Member (U16)
+                ],
+            );
+            assert!(obj2.is_dynamic());
+            assert_eq!(1, obj2.len());
+            assert_eq!(1u16, obj2.get(0).unwrap().get().unwrap());
         }
 
         // invalid length
