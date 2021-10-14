@@ -5,13 +5,13 @@ use std::any::Any;
 use ux::{i24, u24};
 
 pub trait SOMType: Clone {
-    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMTypeError>;
-    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMTypeError>;
-    fn size(&self) -> usize;
-
     fn category(&self) -> SOMTypeCategory {
         SOMTypeCategory::FixedLength
     }
+
+    fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMTypeError>;
+    fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMTypeError>;
+    fn size(&self) -> usize;
 }
 
 #[derive(Debug)]
@@ -70,488 +70,519 @@ impl SOMTypeField {
     }
 }
 
-pub struct SOMSerializer<'a> {
-    buffer: &'a mut [u8],
-    offset: usize,
+mod serialization {
+    use super::*;
+
+    pub struct SOMSerializer<'a> {
+        buffer: &'a mut [u8],
+        offset: usize,
+    }
+
+    pub struct SOMSerializerPromise {
+        offset: usize,
+        size: usize,
+    }
+
+    impl<'a> SOMSerializer<'a> {
+        pub fn new(buffer: &'a mut [u8]) -> SOMSerializer<'a> {
+            SOMSerializer { buffer, offset: 0 }
+        }
+
+        pub fn offset(&self) -> usize {
+            self.offset
+        }
+
+        pub fn promise(&mut self, size: usize) -> Result<SOMSerializerPromise, SOMTypeError> {
+            self.check_size(size)?;
+            let result = SOMSerializerPromise {
+                offset: self.offset,
+                size,
+            };
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn write_lengthfield(
+            &mut self,
+            promise: SOMSerializerPromise,
+            lengthfield: SOMLengthField,
+            value: usize,
+        ) -> Result<(), SOMTypeError> {
+            if promise.size != lengthfield.size() {
+                return Err(SOMTypeError::InvalidType(format!(
+                    "Invalid Length-Field size: {} at offset: {}",
+                    lengthfield.size(),
+                    promise.offset
+                )));
+            }
+
+            match lengthfield {
+                SOMLengthField::None => {}
+                SOMLengthField::U8 => self.buffer[promise.offset] = value as u8,
+                SOMLengthField::U16 => {
+                    BigEndian::write_u16(&mut self.buffer[promise.offset..], value as u16)
+                }
+                SOMLengthField::U32 => {
+                    BigEndian::write_u32(&mut self.buffer[promise.offset..], value as u32)
+                }
+            };
+
+            Ok(())
+        }
+
+        pub fn write_typefield(
+            &mut self,
+            typefield: SOMTypeField,
+            value: usize,
+        ) -> Result<(), SOMTypeError> {
+            match typefield {
+                SOMTypeField::U8 => self.write_u8(value as u8)?,
+                SOMTypeField::U16 => self.write_u16(value as u16, SOMEndian::Big)?,
+                SOMTypeField::U32 => self.write_u32(value as u32, SOMEndian::Big)?,
+            };
+
+            Ok(())
+        }
+
+        pub fn write_bool(&mut self, value: bool) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<bool>();
+            self.check_size(size)?;
+
+            self.buffer[self.offset] = match value {
+                true => 1,
+                false => 0,
+            };
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_u8(&mut self, value: u8) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<u8>();
+            self.check_size(size)?;
+
+            self.buffer[self.offset] = value;
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_i8(&mut self, value: i8) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<i8>();
+            self.check_size(size)?;
+
+            self.buffer[self.offset] = value as u8;
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_u16(&mut self, value: u16, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<u16>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_u16(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_u16(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_i16(&mut self, value: i16, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<i16>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_i16(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_i16(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_u24(&mut self, value: u24, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<u16>() + std::mem::size_of::<u8>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => {
+                    BigEndian::write_uint(&mut self.buffer[self.offset..], u64::from(value), size)
+                }
+                SOMEndian::Little => LittleEndian::write_uint(
+                    &mut self.buffer[self.offset..],
+                    u64::from(value),
+                    size,
+                ),
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_i24(&mut self, value: i24, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<i16>() + std::mem::size_of::<i8>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => {
+                    BigEndian::write_int(&mut self.buffer[self.offset..], i64::from(value), size)
+                }
+                SOMEndian::Little => {
+                    LittleEndian::write_int(&mut self.buffer[self.offset..], i64::from(value), size)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_u32(&mut self, value: u32, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<u32>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_u32(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_u32(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_i32(&mut self, value: i32, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<i32>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_i32(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_i32(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_u64(&mut self, value: u64, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<u64>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_u64(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_u64(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_i64(&mut self, value: i64, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<i64>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_i64(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_i64(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_f32(&mut self, value: f32, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<f32>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_f32(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_f32(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        pub fn write_f64(&mut self, value: f64, endian: SOMEndian) -> Result<(), SOMTypeError> {
+            let size = std::mem::size_of::<f64>();
+            self.check_size(size)?;
+
+            match endian {
+                SOMEndian::Big => BigEndian::write_f64(&mut self.buffer[self.offset..], value),
+                SOMEndian::Little => {
+                    LittleEndian::write_f64(&mut self.buffer[self.offset..], value)
+                }
+            }
+
+            self.offset += size;
+            Ok(())
+        }
+
+        fn check_size(&self, size: usize) -> Result<(), SOMTypeError> {
+            if self.buffer.len() < (self.offset + size) {
+                return Err(SOMTypeError::BufferExhausted(format!(
+                    "Serializer exausted at offset: {} for Object size: {}",
+                    self.offset, size
+                )));
+            }
+
+            Ok(())
+        }
+    }
+
+    pub struct SOMParser<'a> {
+        buffer: &'a [u8],
+        offset: usize,
+    }
+
+    impl<'a> SOMParser<'a> {
+        pub fn new(buffer: &'a [u8]) -> SOMParser<'a> {
+            SOMParser { buffer, offset: 0 }
+        }
+
+        pub fn offset(&self) -> usize {
+            self.offset
+        }
+
+        pub fn skip(&mut self, size: usize) -> Result<usize, SOMTypeError> {
+            self.check_size(size)?;
+            self.offset += size;
+            Ok(size)
+        }
+
+        pub fn read_lengthfield(
+            &mut self,
+            lengthfield: SOMLengthField,
+        ) -> Result<usize, SOMTypeError> {
+            let size = lengthfield.size();
+            self.check_size(size)?;
+
+            let result = match lengthfield {
+                SOMLengthField::None => 0usize,
+                SOMLengthField::U8 => self.read_u8()? as usize,
+                SOMLengthField::U16 => self.read_u16(SOMEndian::Big)? as usize,
+                SOMLengthField::U32 => self.read_u32(SOMEndian::Big)? as usize,
+            };
+
+            Ok(result)
+        }
+
+        pub fn read_typefield(
+            &mut self,
+            typefield: &mut SOMTypeField,
+        ) -> Result<usize, SOMTypeError> {
+            let size = typefield.size();
+            self.check_size(size)?;
+
+            let result = match typefield {
+                SOMTypeField::U8 => self.read_u8()? as usize,
+                SOMTypeField::U16 => self.read_u16(SOMEndian::Big)? as usize,
+                SOMTypeField::U32 => self.read_u32(SOMEndian::Big)? as usize,
+            };
+
+            Ok(result)
+        }
+
+        pub fn read_bool(&mut self) -> Result<bool, SOMTypeError> {
+            let size = std::mem::size_of::<bool>();
+            self.check_size(size)?;
+
+            let value = self.buffer[self.offset];
+            let result = match value {
+                1 => true,
+                0 => false,
+                _ => {
+                    return Err(SOMTypeError::InvalidPayload(format!(
+                        "Invalid Bool value: {} at offset: {}",
+                        value, self.offset
+                    )))
+                }
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_u8(&mut self) -> Result<u8, SOMTypeError> {
+            let size = std::mem::size_of::<u8>();
+            self.check_size(size)?;
+
+            let result = self.buffer[self.offset];
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_i8(&mut self) -> Result<i8, SOMTypeError> {
+            let size = std::mem::size_of::<i8>();
+            self.check_size(size)?;
+
+            let result = self.buffer[self.offset] as i8;
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_u16(&mut self, endian: SOMEndian) -> Result<u16, SOMTypeError> {
+            let size = std::mem::size_of::<u16>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_u16(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_u16(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_i16(&mut self, endian: SOMEndian) -> Result<i16, SOMTypeError> {
+            let size = std::mem::size_of::<i16>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_i16(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_i16(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_u24(&mut self, endian: SOMEndian) -> Result<u24, SOMTypeError> {
+            let size = std::mem::size_of::<u16>() + std::mem::size_of::<u8>();
+            self.check_size(size)?;
+
+            let result = u24::new(match endian {
+                SOMEndian::Big => BigEndian::read_uint(&self.buffer[self.offset..], size),
+                SOMEndian::Little => LittleEndian::read_uint(&self.buffer[self.offset..], size),
+            } as u32);
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_i24(&mut self, endian: SOMEndian) -> Result<i24, SOMTypeError> {
+            let size = std::mem::size_of::<i16>() + std::mem::size_of::<i8>();
+            self.check_size(size)?;
+
+            let result = i24::new(match endian {
+                SOMEndian::Big => BigEndian::read_int(&self.buffer[self.offset..], size),
+                SOMEndian::Little => LittleEndian::read_int(&self.buffer[self.offset..], size),
+            } as i32);
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_u32(&mut self, endian: SOMEndian) -> Result<u32, SOMTypeError> {
+            let size = std::mem::size_of::<u32>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_u32(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_u32(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_i32(&mut self, endian: SOMEndian) -> Result<i32, SOMTypeError> {
+            let size = std::mem::size_of::<i32>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_i32(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_i32(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_u64(&mut self, endian: SOMEndian) -> Result<u64, SOMTypeError> {
+            let size = std::mem::size_of::<u64>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_u64(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_u64(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_i64(&mut self, endian: SOMEndian) -> Result<i64, SOMTypeError> {
+            let size = std::mem::size_of::<i64>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_i64(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_i64(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_f32(&mut self, endian: SOMEndian) -> Result<f32, SOMTypeError> {
+            let size = std::mem::size_of::<f32>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_f32(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_f32(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        pub fn read_f64(&mut self, endian: SOMEndian) -> Result<f64, SOMTypeError> {
+            let size = std::mem::size_of::<f64>();
+            self.check_size(size)?;
+
+            let result = match endian {
+                SOMEndian::Big => BigEndian::read_f64(&self.buffer[self.offset..]),
+                SOMEndian::Little => LittleEndian::read_f64(&self.buffer[self.offset..]),
+            };
+
+            self.offset += size;
+            Ok(result)
+        }
+
+        fn check_size(&self, size: usize) -> Result<(), SOMTypeError> {
+            if self.buffer.len() < (self.offset + size) {
+                return Err(SOMTypeError::BufferExhausted(format!(
+                    "Parser exausted at offset: {} for Object size: {}",
+                    self.offset, size
+                )));
+            }
+
+            Ok(())
+        }
+    }
 }
 
-struct SOMSerializerPromise {
-    offset: usize,
-    size: usize,
-}
-
-impl<'a> SOMSerializer<'a> {
-    pub fn new(buffer: &'a mut [u8]) -> SOMSerializer<'a> {
-        SOMSerializer { buffer, offset: 0 }
-    }
-
-    fn offset(&self) -> usize {
-        self.offset
-    }
-
-    fn promise(&mut self, size: usize) -> Result<SOMSerializerPromise, SOMTypeError> {
-        self.check_size(size)?;
-        let result = SOMSerializerPromise {
-            offset: self.offset,
-            size,
-        };
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn write_lengthfield(
-        &mut self,
-        promise: SOMSerializerPromise,
-        lengthfield: SOMLengthField,
-        value: usize,
-    ) -> Result<(), SOMTypeError> {
-        if promise.size != lengthfield.size() {
-            return Err(SOMTypeError::InvalidType(format!(
-                "Invalid Length-Field size: {} at offset: {}",
-                lengthfield.size(),
-                promise.offset
-            )));
-        }
-
-        match lengthfield {
-            SOMLengthField::None => {}
-            SOMLengthField::U8 => self.buffer[promise.offset] = value as u8,
-            SOMLengthField::U16 => {
-                BigEndian::write_u16(&mut self.buffer[promise.offset..], value as u16)
-            }
-            SOMLengthField::U32 => {
-                BigEndian::write_u32(&mut self.buffer[promise.offset..], value as u32)
-            }
-        };
-
-        Ok(())
-    }
-
-    fn write_typefield(
-        &mut self,
-        typefield: SOMTypeField,
-        value: usize,
-    ) -> Result<(), SOMTypeError> {
-        match typefield {
-            SOMTypeField::U8 => self.write_u8(value as u8)?,
-            SOMTypeField::U16 => self.write_u16(value as u16, SOMEndian::Big)?,
-            SOMTypeField::U32 => self.write_u32(value as u32, SOMEndian::Big)?,
-        };
-
-        Ok(())
-    }
-
-    fn write_bool(&mut self, value: bool) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<bool>();
-        self.check_size(size)?;
-
-        self.buffer[self.offset] = match value {
-            true => 1,
-            false => 0,
-        };
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_u8(&mut self, value: u8) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<u8>();
-        self.check_size(size)?;
-
-        self.buffer[self.offset] = value;
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_i8(&mut self, value: i8) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<i8>();
-        self.check_size(size)?;
-
-        self.buffer[self.offset] = value as u8;
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_u16(&mut self, value: u16, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<u16>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_u16(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_u16(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_i16(&mut self, value: i16, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<i16>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_i16(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_i16(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_u24(&mut self, value: u24, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<u16>() + std::mem::size_of::<u8>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => {
-                BigEndian::write_uint(&mut self.buffer[self.offset..], u64::from(value), size)
-            }
-            SOMEndian::Little => {
-                LittleEndian::write_uint(&mut self.buffer[self.offset..], u64::from(value), size)
-            }
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_i24(&mut self, value: i24, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<i16>() + std::mem::size_of::<i8>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => {
-                BigEndian::write_int(&mut self.buffer[self.offset..], i64::from(value), size)
-            }
-            SOMEndian::Little => {
-                LittleEndian::write_int(&mut self.buffer[self.offset..], i64::from(value), size)
-            }
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_u32(&mut self, value: u32, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<u32>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_u32(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_u32(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_i32(&mut self, value: i32, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<i32>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_i32(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_i32(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_u64(&mut self, value: u64, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<u64>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_u64(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_u64(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_i64(&mut self, value: i64, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<i64>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_i64(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_i64(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_f32(&mut self, value: f32, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<f32>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_f32(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_f32(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn write_f64(&mut self, value: f64, endian: SOMEndian) -> Result<(), SOMTypeError> {
-        let size = std::mem::size_of::<f64>();
-        self.check_size(size)?;
-
-        match endian {
-            SOMEndian::Big => BigEndian::write_f64(&mut self.buffer[self.offset..], value),
-            SOMEndian::Little => LittleEndian::write_f64(&mut self.buffer[self.offset..], value),
-        }
-
-        self.offset += size;
-        Ok(())
-    }
-
-    fn check_size(&self, size: usize) -> Result<(), SOMTypeError> {
-        if self.buffer.len() < (self.offset + size) {
-            return Err(SOMTypeError::BufferExhausted(format!(
-                "Serializer exausted at offset: {} for Object size: {}",
-                self.offset, size
-            )));
-        }
-
-        Ok(())
-    }
-}
-
-pub struct SOMParser<'a> {
-    buffer: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> SOMParser<'a> {
-    pub fn new(buffer: &'a [u8]) -> SOMParser<'a> {
-        SOMParser { buffer, offset: 0 }
-    }
-
-    fn offset(&self) -> usize {
-        self.offset
-    }
-
-    fn skip(&mut self, size: usize) -> Result<usize, SOMTypeError> {
-        self.check_size(size)?;
-        self.offset += size;
-        Ok(size)
-    }
-
-    fn read_lengthfield(&mut self, lengthfield: SOMLengthField) -> Result<usize, SOMTypeError> {
-        let size = lengthfield.size();
-        self.check_size(size)?;
-
-        let result = match lengthfield {
-            SOMLengthField::None => 0usize,
-            SOMLengthField::U8 => self.read_u8()? as usize,
-            SOMLengthField::U16 => self.read_u16(SOMEndian::Big)? as usize,
-            SOMLengthField::U32 => self.read_u32(SOMEndian::Big)? as usize,
-        };
-
-        Ok(result)
-    }
-
-    fn read_typefield(&mut self, typefield: &mut SOMTypeField) -> Result<usize, SOMTypeError> {
-        let size = typefield.size();
-        self.check_size(size)?;
-
-        let result = match typefield {
-            SOMTypeField::U8 => self.read_u8()? as usize,
-            SOMTypeField::U16 => self.read_u16(SOMEndian::Big)? as usize,
-            SOMTypeField::U32 => self.read_u32(SOMEndian::Big)? as usize,
-        };
-
-        Ok(result)
-    }
-
-    fn read_bool(&mut self) -> Result<bool, SOMTypeError> {
-        let size = std::mem::size_of::<bool>();
-        self.check_size(size)?;
-
-        let value = self.buffer[self.offset];
-        let result = match value {
-            1 => true,
-            0 => false,
-            _ => {
-                return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Bool value: {} at offset: {}",
-                    value, self.offset
-                )))
-            }
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_u8(&mut self) -> Result<u8, SOMTypeError> {
-        let size = std::mem::size_of::<u8>();
-        self.check_size(size)?;
-
-        let result = self.buffer[self.offset];
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_i8(&mut self) -> Result<i8, SOMTypeError> {
-        let size = std::mem::size_of::<i8>();
-        self.check_size(size)?;
-
-        let result = self.buffer[self.offset] as i8;
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_u16(&mut self, endian: SOMEndian) -> Result<u16, SOMTypeError> {
-        let size = std::mem::size_of::<u16>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_u16(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_u16(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_i16(&mut self, endian: SOMEndian) -> Result<i16, SOMTypeError> {
-        let size = std::mem::size_of::<i16>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_i16(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_i16(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_u24(&mut self, endian: SOMEndian) -> Result<u24, SOMTypeError> {
-        let size = std::mem::size_of::<u16>() + std::mem::size_of::<u8>();
-        self.check_size(size)?;
-
-        let result = u24::new(match endian {
-            SOMEndian::Big => BigEndian::read_uint(&self.buffer[self.offset..], size),
-            SOMEndian::Little => LittleEndian::read_uint(&self.buffer[self.offset..], size),
-        } as u32);
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_i24(&mut self, endian: SOMEndian) -> Result<i24, SOMTypeError> {
-        let size = std::mem::size_of::<i16>() + std::mem::size_of::<i8>();
-        self.check_size(size)?;
-
-        let result = i24::new(match endian {
-            SOMEndian::Big => BigEndian::read_int(&self.buffer[self.offset..], size),
-            SOMEndian::Little => LittleEndian::read_int(&self.buffer[self.offset..], size),
-        } as i32);
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_u32(&mut self, endian: SOMEndian) -> Result<u32, SOMTypeError> {
-        let size = std::mem::size_of::<u32>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_u32(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_u32(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_i32(&mut self, endian: SOMEndian) -> Result<i32, SOMTypeError> {
-        let size = std::mem::size_of::<i32>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_i32(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_i32(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_u64(&mut self, endian: SOMEndian) -> Result<u64, SOMTypeError> {
-        let size = std::mem::size_of::<u64>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_u64(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_u64(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_i64(&mut self, endian: SOMEndian) -> Result<i64, SOMTypeError> {
-        let size = std::mem::size_of::<i64>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_i64(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_i64(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_f32(&mut self, endian: SOMEndian) -> Result<f32, SOMTypeError> {
-        let size = std::mem::size_of::<f32>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_f32(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_f32(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn read_f64(&mut self, endian: SOMEndian) -> Result<f64, SOMTypeError> {
-        let size = std::mem::size_of::<f64>();
-        self.check_size(size)?;
-
-        let result = match endian {
-            SOMEndian::Big => BigEndian::read_f64(&self.buffer[self.offset..]),
-            SOMEndian::Little => LittleEndian::read_f64(&self.buffer[self.offset..]),
-        };
-
-        self.offset += size;
-        Ok(result)
-    }
-
-    fn check_size(&self, size: usize) -> Result<(), SOMTypeError> {
-        if self.buffer.len() < (self.offset + size) {
-            return Err(SOMTypeError::BufferExhausted(format!(
-                "Parser exausted at offset: {} for Object size: {}",
-                self.offset, size
-            )));
-        }
-
-        Ok(())
-    }
-}
+pub type SOMSerializer<'a> = serialization::SOMSerializer<'a>;
+pub type SOMParser<'a> = serialization::SOMParser<'a>;
 
 mod primitives {
     use super::*;
