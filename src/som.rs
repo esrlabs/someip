@@ -1763,6 +1763,24 @@ mod strings {
     }
 
     impl SOMStringType {
+        pub fn from(
+            lengthfield: SOMLengthField,
+            encoding: SOMStringEncoding,
+            format: SOMStringFormat,
+            min: usize,
+            max: usize,
+            value: String,
+        ) -> SOMStringType {
+            SOMStringType {
+                lengthfield,
+                encoding,
+                format,
+                value,
+                min,
+                max,
+            }
+        }
+
         pub fn fixed(
             encoding: SOMStringEncoding,
             format: SOMStringFormat,
@@ -3183,6 +3201,26 @@ mod tests {
         // struct with string
         {
             let mut obj1 = SOMStruct::from(vec![
+                SOMStructMember::String(SOMString::from(
+                    SOMLengthField::None,
+                    SOMStringEncoding::Utf8,
+                    SOMStringFormat::Plain,
+                    3,
+                    3,
+                    String::from("foo"),
+                )),
+                SOMStructMember::String(SOMString::from(
+                    SOMLengthField::U8,
+                    SOMStringEncoding::Utf16Be,
+                    SOMStringFormat::Plain,
+                    1,
+                    3,
+                    String::from("bar"),
+                )),
+            ]);
+            assert_eq!(2, obj1.len());
+
+            let mut obj2 = SOMStruct::from(vec![
                 SOMStructMember::String(SOMString::fixed(
                     SOMStringEncoding::Utf8,
                     SOMStringFormat::Plain,
@@ -3196,9 +3234,6 @@ mod tests {
                     3,
                 )),
             ]);
-            assert_eq!(2, obj1.len());
-
-            let mut obj2 = obj1.clone();
             assert_eq!(2, obj2.len());
 
             if let Some(SOMStructMember::String(sub)) = obj1.get_mut(0) {
@@ -3306,6 +3341,7 @@ mod tests {
             let mut obj1 = SOMu16Array::fixed(SOMu16::empty(SOMEndian::Big), 3);
             assert!(!obj1.is_dynamic());
             assert_eq!(3, obj1.max());
+            assert_eq!(3, obj1.min());
             assert_eq!(0, obj1.len());
 
             let mut obj2 = obj1.clone();
@@ -3326,6 +3362,7 @@ mod tests {
             );
             assert!(!obj2.is_dynamic());
             assert_eq!(3, obj2.max());
+            assert_eq!(3, obj2.min());
             assert_eq!(3, obj2.len());
 
             for i in 0..obj2.max() {
@@ -3350,9 +3387,10 @@ mod tests {
         // dynamic array
         {
             let mut obj1 =
-                SOMu16Array::dynamic(SOMLengthField::U32, SOMu16::empty(SOMEndian::Big), 0, 3);
+                SOMu16Array::dynamic(SOMLengthField::U32, SOMu16::empty(SOMEndian::Big), 1, 3);
             assert!(obj1.is_dynamic());
             assert_eq!(3, obj1.max());
+            assert_eq!(1, obj1.min());
             assert_eq!(0, obj1.len());
 
             let mut obj2 = obj1.clone();
@@ -3374,6 +3412,7 @@ mod tests {
             );
             assert!(obj2.is_dynamic());
             assert_eq!(3, obj2.max());
+            assert_eq!(1, obj2.min());
             assert_eq!(3, obj2.len());
 
             for i in 0..obj2.max() {
@@ -3412,6 +3451,7 @@ mod tests {
                 SOMu16Array::dynamic(SOMLengthField::U32, SOMu16::empty(SOMEndian::Big), 1, 3);
             assert!(obj1.is_dynamic());
             assert_eq!(3, obj1.max());
+            assert_eq!(1, obj1.min());
             assert_eq!(0, obj1.len());
 
             let mut obj2 = obj1.clone();
@@ -3432,6 +3472,7 @@ mod tests {
             );
             assert!(obj2.is_dynamic());
             assert_eq!(3, obj2.max());
+            assert_eq!(1, obj2.min());
             assert_eq!(1, obj2.len());
 
             assert_eq!(1u16, obj2.get(0).unwrap().get().unwrap());
@@ -3446,9 +3487,9 @@ mod tests {
                 ])),
                 3,
             );
-
             assert!(!obj1.is_dynamic());
             assert_eq!(3, obj1.max());
+            assert_eq!(3, obj1.min());
             assert_eq!(0, obj1.len());
 
             let mut obj2 = obj1.clone();
@@ -3478,9 +3519,9 @@ mod tests {
                     0x00, 0x03, // U16-Member
                 ],
             );
-
             assert!(!obj2.is_dynamic());
             assert_eq!(3, obj2.max());
+            assert_eq!(3, obj2.min());
             assert_eq!(3, obj2.len());
 
             for i in 0..obj2.max() {
