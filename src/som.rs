@@ -2,23 +2,33 @@
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use std::any::Any;
+use thiserror::Error;
 use ux::{i24, u24};
 
-pub trait SOMType: Clone {
-    fn category(&self) -> SOMTypeCategory {
-        SOMTypeCategory::FixedLength
-    }
-
+pub trait SOMType {
     fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMTypeError>;
     fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMTypeError>;
     fn size(&self) -> usize;
+
+    fn category(&self) -> SOMTypeCategory {
+        SOMTypeCategory::FixedLength
+    }
 }
 
-#[derive(Debug)]
+const ERROR_TAG: &str = "SOME/IP Error";
+
+#[derive(Error, Debug)]
 pub enum SOMTypeError {
+    #[error("{}: {0}", ERROR_TAG)]
     BufferExhausted(String),
+    #[error("{}: {0}", ERROR_TAG)]
     InvalidPayload(String),
+    #[error("{}: {0}", ERROR_TAG)]
     InvalidType(String),
+    #[error("{}: {0:?}", ERROR_TAG)]
+    Utf8Error(#[from] std::string::FromUtf8Error),
+    #[error("{}: {0:?}", ERROR_TAG)]
+    Utf16Error(#[from] std::string::FromUtf16Error),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -84,7 +94,7 @@ mod serialization {
     }
 
     impl<'a> SOMSerializer<'a> {
-        pub fn new(buffer: &'a mut [u8]) -> SOMSerializer<'a> {
+        pub fn new(buffer: &'a mut [u8]) -> Self {
             SOMSerializer { buffer, offset: 0 }
         }
 
@@ -110,7 +120,7 @@ mod serialization {
         ) -> Result<(), SOMTypeError> {
             if promise.size != lengthfield.size() {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Invalid Length-Field size: {} at offset: {}",
+                    "Invalid Length-Field size {} at offset {}",
                     lengthfield.size(),
                     promise.offset
                 )));
@@ -336,7 +346,7 @@ mod serialization {
         fn check_size(&self, size: usize) -> Result<(), SOMTypeError> {
             if self.buffer.len() < (self.offset + size) {
                 return Err(SOMTypeError::BufferExhausted(format!(
-                    "Serializer exausted at offset: {} for Object size: {}",
+                    "Serializer exausted at offset {} for Object size {}",
                     self.offset, size
                 )));
             }
@@ -351,7 +361,7 @@ mod serialization {
     }
 
     impl<'a> SOMParser<'a> {
-        pub fn new(buffer: &'a [u8]) -> SOMParser<'a> {
+        pub fn new(buffer: &'a [u8]) -> Self {
             SOMParser { buffer, offset: 0 }
         }
 
@@ -408,7 +418,7 @@ mod serialization {
                 0 => false,
                 _ => {
                     return Err(SOMTypeError::InvalidPayload(format!(
-                        "Invalid Bool value: {} at offset: {}",
+                        "Invalid Bool value {} at offset {}",
                         value, self.offset
                     )))
                 }
@@ -571,7 +581,7 @@ mod serialization {
         fn check_size(&self, size: usize) -> Result<(), SOMTypeError> {
             if self.buffer.len() < (self.offset + size) {
                 return Err(SOMTypeError::BufferExhausted(format!(
-                    "Parser exausted at offset: {} for Object size: {}",
+                    "Parser exausted at offset {} for Object size {}",
                     self.offset, size
                 )));
             }
@@ -593,11 +603,11 @@ mod primitives {
     }
 
     impl<T: Copy + Clone + PartialEq> SOMPrimitiveType<T> {
-        pub fn empty() -> SOMPrimitiveType<T> {
+        pub fn empty() -> Self {
             SOMPrimitiveType { value: None }
         }
 
-        pub fn from(value: T) -> SOMPrimitiveType<T> {
+        pub fn from(value: T) -> Self {
             SOMPrimitiveType { value: Some(value) }
         }
 
@@ -617,14 +627,14 @@ mod primitives {
     }
 
     impl<T: Copy + Clone + PartialEq> SOMPrimitiveTypeWithEndian<T> {
-        pub fn empty(endian: SOMEndian) -> SOMPrimitiveTypeWithEndian<T> {
+        pub fn empty(endian: SOMEndian) -> Self {
             SOMPrimitiveTypeWithEndian {
                 primitive: SOMPrimitiveType::empty(),
                 endian,
             }
         }
 
-        pub fn from(endian: SOMEndian, value: T) -> SOMPrimitiveTypeWithEndian<T> {
+        pub fn from(endian: SOMEndian, value: T) -> Self {
             SOMPrimitiveTypeWithEndian {
                 endian,
                 primitive: SOMPrimitiveType::from(value),
@@ -648,7 +658,7 @@ mod primitives {
                 Some(value) => serializer.write_bool(value)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -678,7 +688,7 @@ mod primitives {
                 Some(value) => serializer.write_u8(value)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -708,7 +718,7 @@ mod primitives {
                 Some(value) => serializer.write_i8(value)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -738,7 +748,7 @@ mod primitives {
                 Some(value) => serializer.write_u16(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -768,7 +778,7 @@ mod primitives {
                 Some(value) => serializer.write_i16(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -798,7 +808,7 @@ mod primitives {
                 Some(value) => serializer.write_u24(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -828,7 +838,7 @@ mod primitives {
                 Some(value) => serializer.write_i24(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -858,7 +868,7 @@ mod primitives {
                 Some(value) => serializer.write_u32(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -888,7 +898,7 @@ mod primitives {
                 Some(value) => serializer.write_i32(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -918,7 +928,7 @@ mod primitives {
                 Some(value) => serializer.write_u64(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -948,7 +958,7 @@ mod primitives {
                 Some(value) => serializer.write_i64(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -978,7 +988,7 @@ mod primitives {
                 Some(value) => serializer.write_f32(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -1008,7 +1018,7 @@ mod primitives {
                 Some(value) => serializer.write_f64(value, self.endian)?,
                 None => {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized Type at offset: {}",
+                        "Uninitialized Type at offset {}",
                         offset
                     )))
                 }
@@ -1049,7 +1059,7 @@ mod arrays {
     use super::*;
 
     #[derive(Debug, Clone)]
-    pub struct SOMArrayType<T: SOMType + Any> {
+    pub struct SOMArrayType<T: SOMType + Any + Clone> {
         lengthfield: SOMLengthField,
         elements: Vec<T>,
         length: usize,
@@ -1057,13 +1067,8 @@ mod arrays {
         max: usize,
     }
 
-    impl<T: SOMType + Any> SOMArrayType<T> {
-        pub fn from(
-            lengthfield: SOMLengthField,
-            min: usize,
-            max: usize,
-            elements: Vec<T>,
-        ) -> SOMArrayType<T> {
+    impl<T: SOMType + Any + Clone> SOMArrayType<T> {
+        pub fn from(lengthfield: SOMLengthField, min: usize, max: usize, elements: Vec<T>) -> Self {
             let size: usize = elements.len();
 
             SOMArrayType {
@@ -1075,7 +1080,7 @@ mod arrays {
             }
         }
 
-        pub fn fixed(element: T, size: usize) -> SOMArrayType<T> {
+        pub fn fixed(element: T, size: usize) -> Self {
             SOMArrayType {
                 lengthfield: SOMLengthField::None,
                 elements: vec![element; size],
@@ -1085,12 +1090,7 @@ mod arrays {
             }
         }
 
-        pub fn dynamic(
-            lengthfield: SOMLengthField,
-            element: T,
-            min: usize,
-            max: usize,
-        ) -> SOMArrayType<T> {
+        pub fn dynamic(lengthfield: SOMLengthField, element: T, min: usize, max: usize) -> Self {
             SOMArrayType {
                 lengthfield,
                 elements: vec![element; max],
@@ -1150,7 +1150,7 @@ mod arrays {
 
             if (length < self.min) || (length > self.max) {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Invalid Array length: {} at offset: {}",
+                    "Invalid Array length {} at offset {}",
                     length, offset
                 )));
             }
@@ -1159,7 +1159,7 @@ mod arrays {
         }
     }
 
-    impl<T: SOMType + Any> SOMType for SOMArrayType<T> {
+    impl<T: SOMType + Any + Clone> SOMType for SOMArrayType<T> {
         fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMTypeError> {
             let offset = serializer.offset();
             self.validate(offset)?;
@@ -1167,8 +1167,9 @@ mod arrays {
             let type_lengthfield = serializer.promise(self.lengthfield.size())?;
 
             for i in 0..self.len() {
-                let element: &T = self.get(i).unwrap();
-                element.serialize(serializer)?;
+                if let Some(element) = self.get(i) {
+                    element.serialize(serializer)?;
+                }
             }
 
             let size = serializer.offset() - offset;
@@ -1193,20 +1194,22 @@ mod arrays {
                 let type_start = parser.offset();
 
                 while (parser.offset() - type_start) < type_lengthfield {
-                    let element: &mut T = self.get_mut(self.len()).unwrap();
-                    element.parse(parser)?;
+                    if let Some(element) = self.get_mut(self.len()) {
+                        element.parse(parser)?;
+                    }
                 }
             } else {
                 for _ in 0..self.max {
-                    let element: &mut T = self.get_mut(self.len()).unwrap();
-                    element.parse(parser)?;
+                    if let Some(element) = self.get_mut(self.len()) {
+                        element.parse(parser)?;
+                    }
                 }
             }
 
             let size = parser.offset() - offset;
             if self.is_dynamic() && (type_lengthfield != (size - self.lengthfield.size())) {
                 return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Length-Field value: {} at offset: {}",
+                    "Invalid Length-Field value {} at offset {}",
                     type_lengthfield, offset
                 )));
             }
@@ -1220,7 +1223,9 @@ mod arrays {
 
             size += self.lengthfield.size();
             for i in 0..self.len() {
-                size += self.get(i).unwrap().size();
+                if let Some(element) = self.get(i) {
+                    size += element.size();
+                }
             }
 
             size
@@ -1262,7 +1267,7 @@ mod structs {
     }
 
     impl<T: SOMType> SOMStructType<T> {
-        pub fn from(members: Vec<T>) -> SOMStructType<T> {
+        pub fn from(members: Vec<T>) -> Self {
             SOMStructType { members }
         }
 
@@ -1332,7 +1337,7 @@ mod unions {
     }
 
     impl<T: SOMType + Any> SOMUnionType<T> {
-        pub fn from(typefield: SOMTypeField, variants: Vec<T>) -> SOMUnionType<T> {
+        pub fn from(typefield: SOMTypeField, variants: Vec<T>) -> Self {
             SOMUnionType {
                 typefield,
                 variants,
@@ -1384,8 +1389,8 @@ mod unions {
 
             serializer.write_typefield(self.typefield, self.index)?;
 
-            if self.has_value() {
-                self.get().unwrap().serialize(serializer)?;
+            if let Some(value) = self.get() {
+                value.serialize(serializer)?;
             }
 
             Ok(serializer.offset() - offset)
@@ -1400,13 +1405,13 @@ mod unions {
                 self.index = index;
             } else {
                 return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Union index: {} at offset: {}",
+                    "Invalid Union index {} at offset {}",
                     index, offset
                 )));
             }
 
-            if self.has_value() {
-                self.get_mut(index).unwrap().parse(parser)?;
+            if let Some(value) = self.get_mut(index) {
+                value.parse(parser)?;
             }
 
             Ok(parser.offset() - offset)
@@ -1416,9 +1421,8 @@ mod unions {
             let mut size: usize = 0;
 
             size += self.typefield.size();
-
-            if self.has_value() {
-                size += self.get().unwrap().size();
+            if let Some(value) = self.get() {
+                size += value.size();
             }
 
             size
@@ -1443,7 +1447,7 @@ mod enums {
     }
 
     impl<T> SOMEnumTypeItem<T> {
-        pub fn from(key: String, value: T) -> SOMEnumTypeItem<T> {
+        pub fn from(key: String, value: T) -> Self {
             SOMEnumTypeItem { key, value }
         }
     }
@@ -1455,7 +1459,7 @@ mod enums {
     }
 
     impl<T: Copy + Clone + PartialEq> SOMEnumType<T> {
-        pub fn from(variants: Vec<SOMEnumTypeItem<T>>) -> SOMEnumType<T> {
+        pub fn from(variants: Vec<SOMEnumTypeItem<T>>) -> Self {
             SOMEnumType { variants, index: 0 }
         }
 
@@ -1469,11 +1473,12 @@ mod enums {
 
         pub fn get(&self) -> Option<T> {
             if self.has_value() {
-                let variant = self.variants.get(self.index - 1).unwrap();
-                Some(variant.value)
-            } else {
-                None
+                if let Some(variant) = self.variants.get(self.index - 1) {
+                    return Some(variant.value);
+                }
             }
+
+            None
         }
 
         pub fn set(&mut self, key: String) -> bool {
@@ -1514,10 +1519,7 @@ mod enums {
     }
 
     impl<T: Copy + Clone + PartialEq> SOMEnumTypeWithEndian<T> {
-        pub fn from(
-            endian: SOMEndian,
-            variants: Vec<SOMEnumTypeItem<T>>,
-        ) -> SOMEnumTypeWithEndian<T> {
+        pub fn from(endian: SOMEndian, variants: Vec<SOMEnumTypeItem<T>>) -> Self {
             SOMEnumTypeWithEndian {
                 enumeration: SOMEnumType::from(variants),
                 endian,
@@ -1550,12 +1552,14 @@ mod enums {
             let offset = serializer.offset();
 
             if self.has_value() {
-                let mut temp = SOMu8::empty();
-                temp.set(self.get().unwrap());
-                temp.serialize(serializer)?;
+                if let Some(value) = self.get() {
+                    let mut temp = SOMu8::empty();
+                    temp.set(value);
+                    temp.serialize(serializer)?;
+                }
             } else {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Uninitialized Type at offset: {}",
+                    "Uninitialized Type at offset {}",
                     offset
                 )));
             }
@@ -1569,11 +1573,17 @@ mod enums {
             let mut temp = SOMu8::empty();
             temp.parse(parser)?;
 
-            let value: u8 = temp.get().unwrap();
-            if !self.apply(value) {
-                return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Enum value: {} at offset: {}",
-                    value, offset
+            if let Some(value) = temp.get() {
+                if !self.apply(value) {
+                    return Err(SOMTypeError::InvalidPayload(format!(
+                        "Invalid Enum value {} at offset {}",
+                        value, offset
+                    )));
+                }
+            } else {
+                return Err(SOMTypeError::InvalidType(format!(
+                    "Uninitialized Type at offset {}",
+                    offset
                 )));
             }
 
@@ -1590,12 +1600,14 @@ mod enums {
             let offset = serializer.offset();
 
             if self.has_value() {
-                let mut temp = SOMu16::empty(self.endian);
-                temp.set(self.get().unwrap());
-                temp.serialize(serializer)?;
+                if let Some(value) = self.get() {
+                    let mut temp = SOMu16::empty(self.endian);
+                    temp.set(value);
+                    temp.serialize(serializer)?;
+                }
             } else {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Uninitialized Type at offset: {}",
+                    "Uninitialized Type at offset {}",
                     offset
                 )));
             }
@@ -1609,11 +1621,17 @@ mod enums {
             let mut temp = SOMu16::empty(self.endian);
             temp.parse(parser)?;
 
-            let value: u16 = temp.get().unwrap();
-            if !self.enumeration.apply(value) {
-                return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Enum value: {} at offset: {}",
-                    value, offset
+            if let Some(value) = temp.get() {
+                if !self.enumeration.apply(value) {
+                    return Err(SOMTypeError::InvalidPayload(format!(
+                        "Invalid Enum value {} at offset {}",
+                        value, offset
+                    )));
+                }
+            } else {
+                return Err(SOMTypeError::InvalidType(format!(
+                    "Uninitialized Type at offset {}",
+                    offset
                 )));
             }
 
@@ -1630,12 +1648,14 @@ mod enums {
             let offset = serializer.offset();
 
             if self.has_value() {
-                let mut temp = SOMu32::empty(self.endian);
-                temp.set(self.get().unwrap());
-                temp.serialize(serializer)?;
+                if let Some(value) = self.get() {
+                    let mut temp = SOMu32::empty(self.endian);
+                    temp.set(value);
+                    temp.serialize(serializer)?;
+                }
             } else {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Uninitialized Type at offset: {}",
+                    "Uninitialized Type at offset {}",
                     offset
                 )));
             }
@@ -1649,11 +1669,17 @@ mod enums {
             let mut temp = SOMu32::empty(self.endian);
             temp.parse(parser)?;
 
-            let value: u32 = temp.get().unwrap();
-            if !self.enumeration.apply(value) {
-                return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Enum value: {} at offset: {}",
-                    value, offset
+            if let Some(value) = temp.get() {
+                if !self.enumeration.apply(value) {
+                    return Err(SOMTypeError::InvalidPayload(format!(
+                        "Invalid Enum value {} at offset {}",
+                        value, offset
+                    )));
+                }
+            } else {
+                return Err(SOMTypeError::InvalidType(format!(
+                    "Uninitialized Type at offset {}",
+                    offset
                 )));
             }
 
@@ -1670,12 +1696,14 @@ mod enums {
             let offset = serializer.offset();
 
             if self.has_value() {
-                let mut temp = SOMu64::empty(self.endian);
-                temp.set(self.get().unwrap());
-                temp.serialize(serializer)?;
+                if let Some(value) = self.get() {
+                    let mut temp = SOMu64::empty(self.endian);
+                    temp.set(value);
+                    temp.serialize(serializer)?;
+                }
             } else {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Uninitialized Type at offset: {}",
+                    "Uninitialized Type at offset {}",
                     offset
                 )));
             }
@@ -1689,11 +1717,17 @@ mod enums {
             let mut temp = SOMu64::empty(self.endian);
             temp.parse(parser)?;
 
-            let value: u64 = temp.get().unwrap();
-            if !self.enumeration.apply(value) {
-                return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Enum value: {} at offset: {}",
-                    value, offset
+            if let Some(value) = temp.get() {
+                if !self.enumeration.apply(value) {
+                    return Err(SOMTypeError::InvalidPayload(format!(
+                        "Invalid Enum value {} at offset {}",
+                        value, offset
+                    )));
+                }
+            } else {
+                return Err(SOMTypeError::InvalidType(format!(
+                    "Uninitialized Type at offset {}",
+                    offset
                 )));
             }
 
@@ -1770,7 +1804,7 @@ mod strings {
         }
     }
 
-    fn string_len(encoding: SOMStringEncoding, format: SOMStringFormat, value: &String) -> usize {
+    fn string_len(encoding: SOMStringEncoding, format: SOMStringFormat, value: &str) -> usize {
         let bom_len = char_len(encoding, &bom(encoding));
         let termination_len = char_len(encoding, &termination(encoding));
 
@@ -1801,7 +1835,7 @@ mod strings {
             min: usize,
             max: usize,
             value: String,
-        ) -> SOMStringType {
+        ) -> Self {
             SOMStringType {
                 lengthfield,
                 encoding,
@@ -1812,11 +1846,7 @@ mod strings {
             }
         }
 
-        pub fn fixed(
-            encoding: SOMStringEncoding,
-            format: SOMStringFormat,
-            max: usize,
-        ) -> SOMStringType {
+        pub fn fixed(encoding: SOMStringEncoding, format: SOMStringFormat, max: usize) -> Self {
             SOMStringType {
                 lengthfield: SOMLengthField::None,
                 encoding,
@@ -1833,7 +1863,7 @@ mod strings {
             format: SOMStringFormat,
             min: usize,
             max: usize,
-        ) -> SOMStringType {
+        ) -> Self {
             SOMStringType {
                 lengthfield,
                 encoding,
@@ -1920,7 +1950,7 @@ mod strings {
 
             if !valid {
                 return Err(SOMTypeError::InvalidType(format!(
-                    "Invalid String length: {} at offset: {}",
+                    "Invalid String length {} at offset {}",
                     length, offset
                 )));
             }
@@ -2019,20 +2049,19 @@ mod strings {
             }
             if !valid {
                 return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid String-BOM at offset: {}",
+                    "Invalid String-BOM at offset {}",
                     parser.offset()
                 )));
             }
 
-            let value: String;
-            match self.encoding {
+            let value = match self.encoding {
                 SOMStringEncoding::Utf8 => {
                     let mut bytes: Vec<u8> = vec![];
                     while string_size >= char_size {
                         bytes.push(parser.read_u8()?);
                         string_size -= char_size;
                     }
-                    value = String::from_utf8(bytes).unwrap();
+                    String::from_utf8(bytes)?
                 }
                 _ => {
                     let mut bytes: Vec<u16> = vec![];
@@ -2040,9 +2069,10 @@ mod strings {
                         bytes.push(parser.read_u16(self.endian())?);
                         string_size -= char_size;
                     }
-                    value = String::from_utf16(&bytes).unwrap()
+                    String::from_utf16(&bytes)?
                 }
-            }
+            };
+
             self.value = value.trim_end_matches(char::from(0x00)).to_string();
 
             if self.has_termination() {
@@ -2056,7 +2086,7 @@ mod strings {
             }
             if !valid {
                 return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid String-Termination at offset: {}",
+                    "Invalid String-Termination at offset {}",
                     parser.offset()
                 )));
             }
@@ -2064,7 +2094,7 @@ mod strings {
             let size = parser.offset() - offset;
             if self.is_dynamic() && (type_lengthfield != (size - self.lengthfield.size())) {
                 return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Length-Field value: {} at offset: {}",
+                    "Invalid Length-Field value {} at offset {}",
                     type_lengthfield, offset
                 )));
             }
@@ -2138,12 +2168,10 @@ mod optionals {
     }
 
     impl<T: SOMType> SOMOptionalTypeItem<T> {
-        fn from(key: usize, value: T, mandatory: bool) -> Option<SOMOptionalTypeItem<T>> {
-            let wiretype: Option<usize> = wire_type(&value);
-
-            if wiretype.is_some() {
+        fn from(key: usize, value: T, mandatory: bool) -> Option<Self> {
+            if let Some(wiretype) = wire_type(&value) {
                 return Some(SOMOptionalTypeItem {
-                    wiretype: wiretype.unwrap(),
+                    wiretype,
                     key,
                     value,
                     mandatory,
@@ -2166,22 +2194,33 @@ mod optionals {
     }
 
     impl<T: SOMType> SOMOptionalType<T> {
-        pub fn from(
-            lengthfield: SOMLengthField,
-            members: Vec<SOMOptionalTypeItem<T>>,
-        ) -> SOMOptionalType<T> {
+        pub fn from(lengthfield: SOMLengthField, members: Vec<SOMOptionalTypeItem<T>>) -> Self {
             SOMOptionalType {
                 lengthfield,
                 members,
             }
         }
 
-        pub fn required(key: usize, value: T) -> SOMOptionalTypeItem<T> {
-            SOMOptionalTypeItem::from(key, value, true).unwrap()
+        pub fn required(key: usize, value: T) -> Result<SOMOptionalTypeItem<T>, SOMTypeError> {
+            if let Some(result) = SOMOptionalTypeItem::from(key, value, true) {
+                return Ok(result);
+            }
+
+            Err(SOMTypeError::InvalidType(format!(
+                "Unsupported TLV-Type {}",
+                key
+            )))
         }
 
-        pub fn optional(key: usize, value: T) -> SOMOptionalTypeItem<T> {
-            SOMOptionalTypeItem::from(key, value, false).unwrap()
+        pub fn optional(key: usize, value: T) -> Result<SOMOptionalTypeItem<T>, SOMTypeError> {
+            if let Some(result) = SOMOptionalTypeItem::from(key, value, false) {
+                return Ok(result);
+            }
+
+            Err(SOMTypeError::InvalidType(format!(
+                "Unsupported TLV-Type {}",
+                key
+            )))
         }
 
         pub fn len(&self) -> usize {
@@ -2259,7 +2298,7 @@ mod optionals {
                     }
                 } else if member.mandatory {
                     return Err(SOMTypeError::InvalidType(format!(
-                        "Uninitialized mandatory member: {} at offset: {}",
+                        "Uninitialized mandatory member {} at offset {}",
                         member.key, offset
                     )));
                 }
@@ -2293,7 +2332,7 @@ mod optionals {
                             member.value.parse(parser)?;
                             if parser.offset() != (member_start + member_lengthfield) {
                                 return Err(SOMTypeError::InvalidPayload(format!(
-                                    "Invalid Length-Field value: {} at offset: {}",
+                                    "Invalid Length-Field value {} at offset {}",
                                     member_lengthfield, member_start
                                 )));
                             }
@@ -2308,10 +2347,9 @@ mod optionals {
 
                 if !found {
                     let wiretype: usize = ((tag >> 8) & 0xFF) as usize;
-                    let wiresize: Option<usize> = wire_size(wiretype);
 
-                    if wiresize.is_some() {
-                        parser.skip(wiresize.unwrap())?;
+                    if let Some(wiresize) = wire_size(wiretype) {
+                        parser.skip(wiresize)?;
                     } else {
                         let skip = parser.read_lengthfield(self.lengthfield)?;
                         parser.skip(skip)?;
@@ -2322,7 +2360,7 @@ mod optionals {
             for member in &mut self.members {
                 if member.mandatory && !member.set {
                     return Err(SOMTypeError::InvalidPayload(format!(
-                        "Uninitialized mandatory member: : {} at offset: {}",
+                        "Uninitialized mandatory member {} at offset {}",
                         member.key, offset
                     )));
                 }
@@ -2331,7 +2369,7 @@ mod optionals {
             let size = parser.offset() - offset;
             if type_lengthfield != (size - self.lengthfield.size()) {
                 return Err(SOMTypeError::InvalidPayload(format!(
-                    "Invalid Length-Field value: {} at offset: {}",
+                    "Invalid Length-Field value {} at offset {}",
                     type_lengthfield, offset
                 )));
             }
@@ -2469,11 +2507,9 @@ mod tests {
     fn serialize_fail<T: SOMType>(obj: &T, buffer: &mut [u8], error: &str) {
         let mut serializer = SOMSerializer::new(&mut buffer[..]);
         match obj.serialize(&mut serializer) {
-            Err(err) => match err {
-                SOMTypeError::BufferExhausted(msg) => assert_eq!(msg, error),
-                SOMTypeError::InvalidPayload(msg) => assert_eq!(msg, error),
-                SOMTypeError::InvalidType(msg) => assert_eq!(msg, error),
-            },
+            Err(err) => {
+                assert_eq!(format!("{}", err), format!("{}: {}", ERROR_TAG, error));
+            }
             _ => panic!(),
         }
     }
@@ -2481,11 +2517,9 @@ mod tests {
     fn parse_fail<T: SOMType>(obj: &mut T, buffer: &[u8], error: &str) {
         let mut parser = SOMParser::new(&buffer[..]);
         match obj.parse(&mut parser) {
-            Err(err) => match err {
-                SOMTypeError::BufferExhausted(msg) => assert_eq!(msg, error),
-                SOMTypeError::InvalidPayload(msg) => assert_eq!(msg, error),
-                SOMTypeError::InvalidType(msg) => assert_eq!(msg, error),
-            },
+            Err(err) => {
+                assert_eq!(format!("{}", err), format!("{}: {}", ERROR_TAG, error));
+            }
             _ => panic!(),
         }
     }
@@ -2516,28 +2550,28 @@ mod tests {
             let obj1 = SOMBool::from(true);
             let mut obj2 = SOMBool::empty();
             serialize_parse(&obj1, &mut obj2, &[0x01]);
-            assert_eq!(true, obj2.get().unwrap());
+            assert!(obj2.get().unwrap());
 
             let obj1 = SOMBool::from(false);
             let mut obj2 = SOMBool::empty();
             serialize_parse(&obj1, &mut obj2, &[0x00]);
-            assert_eq!(false, obj2.get().unwrap());
+            assert!(!obj2.get().unwrap());
 
             let mut obj = SOMBool::from(true);
             serialize_fail(
                 &obj,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
 
             let mut obj = SOMBool::empty();
-            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
-            parse_fail(&mut obj, &[0x2], "Invalid Bool value: 2 at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset 0");
+            parse_fail(&mut obj, &[0x2], "Invalid Bool value 2 at offset 0");
         }
 
         // u8
@@ -2551,16 +2585,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
 
             let obj = SOMu8::empty();
-            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset 0");
         }
 
         // i8
@@ -2574,16 +2608,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
 
             let obj = SOMi8::empty();
-            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset 0");
         }
 
         // u16
@@ -2602,16 +2636,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 1],
-                "Serializer exausted at offset: 0 for Object size: 2",
+                "Serializer exausted at offset 0 for Object size 2",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 1],
-                "Parser exausted at offset: 0 for Object size: 2",
+                "Parser exausted at offset 0 for Object size 2",
             );
 
             let obj = SOMu16::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // i16
@@ -2630,16 +2664,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 1],
-                "Serializer exausted at offset: 0 for Object size: 2",
+                "Serializer exausted at offset 0 for Object size 2",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 1],
-                "Parser exausted at offset: 0 for Object size: 2",
+                "Parser exausted at offset 0 for Object size 2",
             );
 
             let obj = SOMi16::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // u24
@@ -2658,16 +2692,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 2],
-                "Serializer exausted at offset: 0 for Object size: 3",
+                "Serializer exausted at offset 0 for Object size 3",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 2],
-                "Parser exausted at offset: 0 for Object size: 3",
+                "Parser exausted at offset 0 for Object size 3",
             );
 
             let obj = SOMu24::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // i24
@@ -2686,16 +2720,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 2],
-                "Serializer exausted at offset: 0 for Object size: 3",
+                "Serializer exausted at offset 0 for Object size 3",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 2],
-                "Parser exausted at offset: 0 for Object size: 3",
+                "Parser exausted at offset 0 for Object size 3",
             );
 
             let obj = SOMi24::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // u32
@@ -2714,16 +2748,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 3],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 3],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             let obj = SOMu32::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // i32
@@ -2742,16 +2776,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 3],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 3],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             let obj = SOMi32::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // u64
@@ -2778,16 +2812,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 7],
-                "Serializer exausted at offset: 0 for Object size: 8",
+                "Serializer exausted at offset 0 for Object size 8",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 7],
-                "Parser exausted at offset: 0 for Object size: 8",
+                "Parser exausted at offset 0 for Object size 8",
             );
 
             let obj = SOMu64::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // i64
@@ -2814,16 +2848,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 7],
-                "Serializer exausted at offset: 0 for Object size: 8",
+                "Serializer exausted at offset 0 for Object size 8",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 7],
-                "Parser exausted at offset: 0 for Object size: 8",
+                "Parser exausted at offset 0 for Object size 8",
             );
 
             let obj = SOMi64::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // f32
@@ -2842,16 +2876,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 3],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 3],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             let obj = SOMf32::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
 
         // f64
@@ -2878,16 +2912,16 @@ mod tests {
             serialize_fail(
                 &obj,
                 &mut [0u8; 7],
-                "Serializer exausted at offset: 0 for Object size: 8",
+                "Serializer exausted at offset 0 for Object size 8",
             );
             parse_fail(
                 &mut obj,
                 &[0u8; 7],
-                "Parser exausted at offset: 0 for Object size: 8",
+                "Parser exausted at offset 0 for Object size 8",
             );
 
             let obj = SOMf64::empty(SOMEndian::Big);
-            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 2], "Uninitialized Type at offset 0");
         }
     }
 
@@ -2928,7 +2962,7 @@ mod tests {
             assert_eq!(2, obj2.len());
 
             if let Some(SOMStructMember::Bool(sub)) = obj2.get(0) {
-                assert_eq!(true, sub.get().unwrap());
+                assert!(sub.get().unwrap());
             } else {
                 panic!();
             }
@@ -2942,12 +2976,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 2],
-                "Serializer exausted at offset: 1 for Object size: 2",
+                "Serializer exausted at offset 1 for Object size 2",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 2],
-                "Parser exausted at offset: 1 for Object size: 2",
+                "Parser exausted at offset 1 for Object size 2",
             );
         }
 
@@ -2991,7 +3025,7 @@ mod tests {
 
             if let Some(SOMStructMember::Struct(sub)) = obj2.get(0) {
                 if let Some(SOMStructMember::Bool(subsub)) = sub.get(0) {
-                    assert_eq!(true, subsub.get().unwrap());
+                    assert!(subsub.get().unwrap());
                 } else {
                     panic!();
                 }
@@ -3013,7 +3047,7 @@ mod tests {
                 }
 
                 if let Some(SOMStructMember::Bool(subsub)) = sub.get(1) {
-                    assert_eq!(true, subsub.get().unwrap());
+                    assert!(subsub.get().unwrap());
                 } else {
                     panic!();
                 }
@@ -3024,12 +3058,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 5],
-                "Serializer exausted at offset: 5 for Object size: 1",
+                "Serializer exausted at offset 5 for Object size 1",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 5],
-                "Parser exausted at offset: 5 for Object size: 1",
+                "Parser exausted at offset 5 for Object size 1",
             );
         }
 
@@ -3173,12 +3207,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
         }
 
@@ -3220,12 +3254,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 2",
+                "Serializer exausted at offset 0 for Object size 2",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 2",
+                "Parser exausted at offset 0 for Object size 2",
             );
         }
 
@@ -3307,10 +3341,7 @@ mod tests {
         {
             let mut obj1 = SOMStruct::from(vec![SOMStructMember::Optional(SOMOptional::from(
                 SOMLengthField::U32,
-                vec![SOMOptional::required(
-                    1,
-                    SOMOptionalMember::Bool(SOMBool::empty()),
-                )],
+                vec![SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())).unwrap()],
             ))]);
             assert_eq!(1, obj1.len());
 
@@ -3326,10 +3357,7 @@ mod tests {
 
             let mut obj2 = SOMStruct::from(vec![SOMStructMember::Optional(SOMOptional::from(
                 SOMLengthField::U32,
-                vec![SOMOptional::required(
-                    1,
-                    SOMOptionalMember::Bool(SOMBool::empty()),
-                )],
+                vec![SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())).unwrap()],
             ))]);
             assert_eq!(1, obj2.len());
 
@@ -3360,8 +3388,8 @@ mod tests {
         {
             let mut obj = SOMStruct::from(vec![SOMStructMember::Bool(SOMBool::empty())]);
 
-            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset: 0");
-            parse_fail(&mut obj, &[0x2], "Invalid Bool value: 2 at offset: 0");
+            serialize_fail(&obj, &mut [0u8; 1], "Uninitialized Type at offset 0");
+            parse_fail(&mut obj, &[0x2], "Invalid Bool value 2 at offset 0");
         }
     }
 
@@ -3403,12 +3431,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 5],
-                "Serializer exausted at offset: 4 for Object size: 2",
+                "Serializer exausted at offset 4 for Object size 2",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 5],
-                "Parser exausted at offset: 4 for Object size: 2",
+                "Parser exausted at offset 4 for Object size 2",
             );
 
             obj1.clear();
@@ -3453,23 +3481,23 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 3],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 3],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             serialize_fail(
                 &obj1,
                 &mut [0u8; 9],
-                "Serializer exausted at offset: 8 for Object size: 2",
+                "Serializer exausted at offset 8 for Object size 2",
             );
             parse_fail(
                 &mut obj2,
                 &[0x00, 0x00, 0x00, 0x01],
-                "Parser exausted at offset: 4 for Object size: 2",
+                "Parser exausted at offset 4 for Object size 2",
             );
 
             obj1.clear();
@@ -3487,8 +3515,8 @@ mod tests {
 
             let mut obj2 = obj1.clone();
 
-            serialize_fail(&obj1, &mut [0u8; 4], "Invalid Array length: 0 at offset: 0");
-            parse_fail(&mut obj2, &[0u8; 4], "Invalid Array length: 0 at offset: 0");
+            serialize_fail(&obj1, &mut [0u8; 4], "Invalid Array length 0 at offset 0");
+            parse_fail(&mut obj2, &[0u8; 4], "Invalid Array length 0 at offset 0");
 
             obj1.get_mut(0).unwrap().set(1u16);
             assert_eq!(1, obj1.len());
@@ -3640,15 +3668,15 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
 
-            parse_fail(&mut obj2, &[0x03], "Invalid Union index: 3 at offset: 0");
+            parse_fail(&mut obj2, &[0x03], "Invalid Union index 3 at offset 0");
 
             obj1.clear();
             assert!(!obj1.has_value());
@@ -3721,12 +3749,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 2",
+                "Serializer exausted at offset 0 for Object size 2",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 2",
+                "Parser exausted at offset 0 for Object size 2",
             );
 
             obj1.clear();
@@ -3778,15 +3806,15 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
 
-            parse_fail(&mut obj2, &[0u8; 1], "Invalid Enum value: 0 at offset: 0");
+            parse_fail(&mut obj2, &[0u8; 1], "Invalid Enum value 0 at offset 0");
 
             obj1.clear();
             assert!(!obj1.has_value());
@@ -3827,15 +3855,15 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 2",
+                "Serializer exausted at offset 0 for Object size 2",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 2",
+                "Parser exausted at offset 0 for Object size 2",
             );
 
-            parse_fail(&mut obj2, &[0u8; 2], "Invalid Enum value: 0 at offset: 0");
+            parse_fail(&mut obj2, &[0u8; 2], "Invalid Enum value 0 at offset 0");
 
             obj1.clear();
             assert!(!obj1.has_value());
@@ -3976,12 +4004,12 @@ mod tests {
             serialize_fail(
                 &obj2,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 1",
+                "Serializer exausted at offset 0 for Object size 1",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 1",
+                "Parser exausted at offset 0 for Object size 1",
             );
 
             obj1.clear();
@@ -4125,12 +4153,12 @@ mod tests {
             serialize_fail(
                 &obj2,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             obj1.clear();
@@ -4277,11 +4305,7 @@ mod tests {
             assert_eq!(1, obj2.len());
             assert_eq!(1 + 1, obj2.size());
 
-            serialize_fail(
-                &obj2,
-                &mut [0u8; 2],
-                "Invalid String length: 1 at offset: 0",
-            );
+            serialize_fail(&obj2, &mut [0u8; 2], "Invalid String length 1 at offset 0");
         }
     }
 
@@ -4308,8 +4332,9 @@ mod tests {
             let mut obj1 = SOMOptional::from(
                 SOMLengthField::U32,
                 vec![
-                    SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())),
-                    SOMOptional::optional(2, SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big))),
+                    SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())).unwrap(),
+                    SOMOptional::optional(2, SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big)))
+                        .unwrap(),
                 ],
             );
             assert_eq!(2, obj1.len());
@@ -4344,7 +4369,7 @@ mod tests {
             assert_eq!(2, obj2.len());
 
             if let Some(SOMStructMember::Bool(sub)) = obj2.get(1) {
-                assert_eq!(true, sub.get().unwrap());
+                assert!(sub.get().unwrap());
             } else {
                 panic!();
             }
@@ -4358,12 +4383,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             obj1.clear();
@@ -4376,7 +4401,7 @@ mod tests {
             let mut obj1 = SOMOptional::from(
                 SOMLengthField::U32,
                 vec![
-                    SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())),
+                    SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())).unwrap(),
                     SOMOptional::required(
                         2,
                         SOMOptionalMember::String(SOMString::fixed(
@@ -4384,7 +4409,8 @@ mod tests {
                             SOMStringFormat::Plain,
                             3,
                         )),
-                    ),
+                    )
+                    .unwrap(),
                     SOMOptional::optional(
                         3,
                         SOMOptionalMember::ArrayU16(SOMu16Array::dynamic(
@@ -4393,7 +4419,8 @@ mod tests {
                             1,
                             3,
                         )),
-                    ),
+                    )
+                    .unwrap(),
                 ],
             );
             assert_eq!(3, obj1.len());
@@ -4442,7 +4469,7 @@ mod tests {
             assert_eq!(3, obj2.len());
 
             if let Some(SOMStructMember::Bool(sub)) = obj2.get(1) {
-                assert_eq!(true, sub.get().unwrap());
+                assert!(sub.get().unwrap());
             } else {
                 panic!();
             }
@@ -4465,12 +4492,12 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 0],
-                "Serializer exausted at offset: 0 for Object size: 4",
+                "Serializer exausted at offset 0 for Object size 4",
             );
             parse_fail(
                 &mut obj2,
                 &[0u8; 0],
-                "Parser exausted at offset: 0 for Object size: 4",
+                "Parser exausted at offset 0 for Object size 4",
             );
 
             obj1.clear();
@@ -4484,8 +4511,9 @@ mod tests {
             let mut obj1 = SOMOptional::from(
                 SOMLengthField::U32,
                 vec![
-                    SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())),
-                    SOMOptional::required(2, SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big))),
+                    SOMOptional::required(1, SOMOptionalMember::Bool(SOMBool::empty())).unwrap(),
+                    SOMOptional::required(2, SOMOptionalMember::U16(SOMu16::empty(SOMEndian::Big)))
+                        .unwrap(),
                 ],
             );
             assert_eq!(2, obj1.len());
@@ -4493,7 +4521,7 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 11],
-                "Uninitialized mandatory member: 1 at offset: 0",
+                "Uninitialized mandatory member 1 at offset 0",
             );
 
             if let Some(SOMUnionMember::Bool(sub)) = obj1.get_mut(1) {
@@ -4505,7 +4533,7 @@ mod tests {
             serialize_fail(
                 &obj1,
                 &mut [0u8; 11],
-                "Uninitialized mandatory member: 2 at offset: 0",
+                "Uninitialized mandatory member 2 at offset 0",
             );
 
             parse_fail(
@@ -4513,7 +4541,7 @@ mod tests {
                 &[
                     0x00, 0x00, 0x00, 0x00, // Length-Field (U32)
                 ],
-                "Uninitialized mandatory member: : 1 at offset: 0",
+                "Uninitialized mandatory member 1 at offset 0",
             );
 
             parse_fail(
@@ -4523,7 +4551,7 @@ mod tests {
                     0x00, 0x01, // TLV-Tag (U16)
                     0x01, // Bool-Memeber
                 ],
-                "Uninitialized mandatory member: : 2 at offset: 0",
+                "Uninitialized mandatory member 2 at offset 0",
             );
         }
     }

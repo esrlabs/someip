@@ -10,6 +10,7 @@ edition = "2018"
 nom = "6.1"
 byteorder = "1"
 ux = "0.1"
+thiserror = "1.0"
 
 [dev-dependencies]
 hex = "0.4.3"
