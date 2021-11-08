@@ -1,14 +1,12 @@
 [package]
 name = "someip-parser"
-version = "0.1.0"
-authors = ["Jens Waechtler <jens.waechtler@esrlabs.com>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version = "0.2.0"
+authors = ["ESRLabs"]
+edition = "2021"
 
 [dependencies]
 bytes = "1.0"
-nom = "6.1"
+nom = "7.1"
 byteorder = "1"
 ux = "0.1"
 thiserror = "1.0"

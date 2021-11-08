@@ -128,7 +128,6 @@ impl From<u16> for ServiceID {
     }
 }
 
-
 /// Transforms a ServiceId to an u16
 impl From<ServiceID> for u16 {
     fn from(i: ServiceID) -> Self {
@@ -164,7 +163,6 @@ impl From<ClientID> for u16 {
     }
 }
 
-
 /// Transforms an u16 to a SessionID
 impl From<u16> for SessionID {
     fn from(i: u16) -> Self {
@@ -178,7 +176,6 @@ impl From<SessionID> for u16 {
         i.0
     }
 }
-
 
 /// Transforms a byte slice to a MessageType
 impl From<&[u8]> for MessageType {
@@ -322,47 +319,53 @@ pub fn someip_header(input: &[u8]) -> IResult<&[u8], SomeIpHeader> {
 /// Parses the different kinds of SomeIP messages (at the moment only basic type) as Result.
 pub fn someip_message(input: &[u8]) -> Result<SomeIp> {
     match someip_header(input) {
-        Ok((_, SomeIpHeader {
-            message_id: MessageID {
-                service_id: ServiceID(0xFFFF),
-                method_id: MethodID(0x0000),
+        Ok((
+            _,
+            SomeIpHeader {
+                message_id:
+                    MessageID {
+                        service_id: ServiceID(0xFFFF),
+                        method_id: MethodID(0x0000),
+                    },
+                length: 8,
+                request_id:
+                    RequestID {
+                        client_id: ClientID(0xDEAD),
+                        session_id: SessionID(0xBEEF),
+                    },
+                protocol_version: 0x01,
+                interface_version: 0x01,
+                message_type: MessageType::RequestNoReturn,
+                return_code: ReturnCode::EOk,
             },
-            length: 8,
-            request_id: RequestID {
-                client_id: ClientID(0xDEAD),
-                session_id: SessionID(0xBEEF),
-            },
-            protocol_version: 0x01,
-            interface_version: 0x01,
-            message_type: MessageType::RequestNoReturn,
-            return_code: ReturnCode::EOk,
-        })) => {
-            Ok(SomeIp::SomeIpMagicCookieClient)
-        }
+        )) => Ok(SomeIp::SomeIpMagicCookieClient),
 
-        Ok((_, SomeIpHeader {
-            message_id: MessageID {
-                service_id: ServiceID(0xFFFF),
-                method_id: MethodID(0x8000),
+        Ok((
+            _,
+            SomeIpHeader {
+                message_id:
+                    MessageID {
+                        service_id: ServiceID(0xFFFF),
+                        method_id: MethodID(0x8000),
+                    },
+                length: 8,
+                request_id:
+                    RequestID {
+                        client_id: ClientID(0xDEAD),
+                        session_id: SessionID(0xBEEF),
+                    },
+                protocol_version: 0x01,
+                interface_version: 0x01,
+                message_type: MessageType::Notification,
+                return_code: ReturnCode::EOk,
             },
-            length: 8,
-            request_id: RequestID {
-                client_id: ClientID(0xDEAD),
-                session_id: SessionID(0xBEEF),
-            },
-            protocol_version: 0x01,
-            interface_version: 0x01,
-            message_type: MessageType::Notification,
-            return_code: ReturnCode::EOk,
-        })) => {
-            Ok(SomeIp::SomeIpMagicCookieServer)
-        }
+        )) => Ok(SomeIp::SomeIpMagicCookieServer),
 
         Ok((payload, header)) => {
             return Ok(SomeIp::SomeIpMessage(SomeIpMessage { header, payload }));
         }
 
-        Err(_) => { Err(SomeIpError) }
+        Err(_) => Err(SomeIpError),
     }
 }
 

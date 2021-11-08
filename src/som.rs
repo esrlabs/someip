@@ -1853,7 +1853,7 @@ mod strings {
                 format,
                 value: String::from(""),
                 min: max,
-                max: max,
+                max,
             }
         }
 
@@ -1898,19 +1898,17 @@ mod strings {
         }
 
         pub fn has_bom(&self) -> bool {
-            match self.format {
-                SOMStringFormat::WithBOM => true,
-                SOMStringFormat::WithBOMandTermination => true,
-                _ => false,
-            }
+            matches!(
+                self.format,
+                SOMStringFormat::WithBOM | SOMStringFormat::WithBOMandTermination
+            )
         }
 
         pub fn has_termination(&self) -> bool {
-            match self.format {
-                SOMStringFormat::WithTermination => true,
-                SOMStringFormat::WithBOMandTermination => true,
-                _ => false,
-            }
+            matches!(
+                self.format,
+                SOMStringFormat::WithTermination | SOMStringFormat::WithBOMandTermination
+            )
         }
 
         pub fn set(&mut self, value: String) -> bool {
@@ -2505,7 +2503,7 @@ mod tests {
     }
 
     fn serialize_fail<T: SOMType>(obj: &T, buffer: &mut [u8], error: &str) {
-        let mut serializer = SOMSerializer::new(&mut buffer[..]);
+        let mut serializer = SOMSerializer::new(&mut *buffer);
         match obj.serialize(&mut serializer) {
             Err(err) => {
                 assert_eq!(format!("{}", err), format!("{}: {}", ERROR_TAG, error));
@@ -2515,7 +2513,7 @@ mod tests {
     }
 
     fn parse_fail<T: SOMType>(obj: &mut T, buffer: &[u8], error: &str) {
-        let mut parser = SOMParser::new(&buffer[..]);
+        let mut parser = SOMParser::new(buffer);
         match obj.parse(&mut parser) {
             Err(err) => {
                 assert_eq!(format!("{}", err), format!("{}: {}", ERROR_TAG, error));
@@ -4249,7 +4247,7 @@ mod tests {
                 10,
             );
             assert_eq!(1, obj1.len());
-            assert_eq!(4 + 1 * 2, obj1.size());
+            assert_eq!(4 + 2, obj1.size());
 
             let mut obj2 = obj1.clone();
 
@@ -4287,7 +4285,7 @@ mod tests {
             assert_eq!(1, obj1.len());
             assert_eq!(3, obj1.size());
 
-            serialize(&obj1, &mut [0x66, 0x00, 0x00]);
+            serialize(&obj1, &[0x66, 0x00, 0x00]);
 
             let mut obj2 = SOMString::dynamic(
                 SOMLengthField::U8,

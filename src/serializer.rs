@@ -1,8 +1,8 @@
 use crate::parser::*;
-use bytes::{BytesMut, BufMut};
-
+use bytes::{BufMut, BytesMut};
 
 /// Serialization of a SomeIP header to bytes
+#[allow(dead_code)]
 fn serialize_someip_header(header: &SomeIpHeader) -> Vec<u8> {
     let mut buf = BytesMut::with_capacity(144);
     buf.put_u16(header.message_id.service_id.into());
@@ -19,6 +19,7 @@ fn serialize_someip_header(header: &SomeIpHeader) -> Vec<u8> {
 }
 
 /// Serialization of a SomeIP message to bytes
+#[allow(dead_code)]
 pub fn serialize_someip(package: &SomeIp) -> Vec<u8> {
     match package {
         SomeIp::SomeIpMessage(p) => {
@@ -68,9 +69,7 @@ pub fn serialize_someip(package: &SomeIp) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{MessageID, MethodID, ServiceID, RequestID, MessageType, ReturnCode};
-    use crate::parser::SomeIp::SomeIpMagicCookieClient;
-
+    use crate::parser::{MessageID, MessageType, MethodID, RequestID, ReturnCode, ServiceID};
 
     #[test]
     fn check_someip_header_serializer() {
@@ -86,29 +85,26 @@ mod tests {
         //     Return Code: 0x00 (Ok)
         //     Payload: NONE
 
-        let bytes =
-            hex::decode("30850001000000080000000001010000").expect("invalid hex string");
+        let bytes = hex::decode("30850001000000080000000001010000").expect("invalid hex string");
         // let bytes_slice = bytes.as_slice();
         // let payload: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(
             bytes,
-            serialize_someip_header(
-                &SomeIpHeader {
-                    message_id: MessageID {
-                        method_id: MethodID(0x0001),
-                        service_id: ServiceID(0x3085),
-                    },
-                    length: 8,
-                    request_id: RequestID {
-                        client_id: ClientID(0x0000),
-                        session_id: SessionID(0x0000),
-                    },
-                    protocol_version: 0x01,
-                    interface_version: 0x01,
-                    message_type: MessageType::Request,
-                    return_code: ReturnCode::EOk,
-                }
-            )
+            serialize_someip_header(&SomeIpHeader {
+                message_id: MessageID {
+                    method_id: MethodID(0x0001),
+                    service_id: ServiceID(0x3085),
+                },
+                length: 8,
+                request_id: RequestID {
+                    client_id: ClientID(0x0000),
+                    session_id: SessionID(0x0000),
+                },
+                protocol_version: 0x01,
+                interface_version: 0x01,
+                message_type: MessageType::Request,
+                return_code: ReturnCode::EOk,
+            })
         )
     }
 
@@ -133,30 +129,24 @@ mod tests {
         let payload: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(
             bytes,
-            serialize_someip(
-                &SomeIp::SomeIpMessage(
-                    SomeIpMessage {
-                        header:
-                        SomeIpHeader {
-                            message_id: MessageID {
-                                method_id: MethodID(0x8005),
-                                service_id: ServiceID(0x0103),
-                            },
-                            length: 13,
-                            request_id: RequestID {
-                                client_id: ClientID(0x0000),
-                                session_id: SessionID(0x0000),
-                            },
-                            protocol_version: 0x01,
-                            interface_version: 0x01,
-                            message_type: MessageType::Notification,
-                            return_code: ReturnCode::EOk,
-                        },
-                        payload,
-                    }
-                )
-            )
+            serialize_someip(&SomeIp::SomeIpMessage(SomeIpMessage {
+                header: SomeIpHeader {
+                    message_id: MessageID {
+                        method_id: MethodID(0x8005),
+                        service_id: ServiceID(0x0103),
+                    },
+                    length: 13,
+                    request_id: RequestID {
+                        client_id: ClientID(0x0000),
+                        session_id: SessionID(0x0000),
+                    },
+                    protocol_version: 0x01,
+                    interface_version: 0x01,
+                    message_type: MessageType::Notification,
+                    return_code: ReturnCode::EOk,
+                },
+                payload,
+            }))
         )
     }
-
 }
