@@ -2,10 +2,11 @@
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use std::any::Any;
+use std::fmt::Display;
 use thiserror::Error;
 use ux::{i24, u24};
 
-pub trait SOMType {
+pub trait SOMType: Display {
     fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMTypeError>;
     fn parse(&mut self, parser: &mut SOMParser) -> Result<usize, SOMTypeError>;
     fn size(&self) -> usize;
@@ -13,6 +14,8 @@ pub trait SOMType {
     fn category(&self) -> SOMTypeCategory {
         SOMTypeCategory::FixedLength
     }
+
+    fn as_any(&self) -> &dyn Any;
 }
 
 const ERROR_TAG: &str = "SOME/IP Error";
@@ -76,6 +79,33 @@ impl SOMTypeField {
             SOMTypeField::U8 => std::mem::size_of::<u8>(),
             SOMTypeField::U16 => std::mem::size_of::<u16>(),
             SOMTypeField::U32 => std::mem::size_of::<u32>(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SOMTypeMeta {
+    pub name: String,
+    pub description: String,
+}
+
+impl SOMTypeMeta {
+    pub fn empty() -> Self {
+        SOMTypeMeta {
+            name: String::from(""),
+            description: String::from(""),
+        }
+    }
+
+    pub fn from(name: String, description: String) -> Self {
+        SOMTypeMeta { name, description }
+    }
+
+    pub fn to_str(&self) -> String {
+        if self.name.is_empty() || self.description.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} ({})", self.name, self.description)
         }
     }
 }
@@ -594,21 +624,37 @@ mod serialization {
 pub type SOMSerializer<'a> = serialization::SOMSerializer<'a>;
 pub type SOMParser<'a> = serialization::SOMParser<'a>;
 
-mod primitives {
+pub(crate) mod primitives {
     use super::*;
 
     #[derive(Debug, Clone)]
     pub struct SOMPrimitiveType<T> {
-        pub value: Option<T>,
+        meta: Option<SOMTypeMeta>,
+        value: Option<T>,
     }
 
-    impl<T: Copy + Clone + PartialEq> SOMPrimitiveType<T> {
+    impl<T: Copy + PartialEq> SOMPrimitiveType<T> {
         pub fn empty() -> Self {
-            SOMPrimitiveType { value: None }
+            SOMPrimitiveType {
+                meta: None,
+                value: None,
+            }
         }
 
         pub fn from(value: T) -> Self {
-            SOMPrimitiveType { value: Some(value) }
+            SOMPrimitiveType {
+                meta: None,
+                value: Some(value),
+            }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn set(&mut self, value: T) {
@@ -622,11 +668,11 @@ mod primitives {
 
     #[derive(Debug, Clone)]
     pub struct SOMPrimitiveTypeWithEndian<T> {
-        pub primitive: SOMPrimitiveType<T>,
-        pub endian: SOMEndian,
+        primitive: SOMPrimitiveType<T>,
+        endian: SOMEndian,
     }
 
-    impl<T: Copy + Clone + PartialEq> SOMPrimitiveTypeWithEndian<T> {
+    impl<T: Copy + PartialEq> SOMPrimitiveTypeWithEndian<T> {
         pub fn empty(endian: SOMEndian) -> Self {
             SOMPrimitiveTypeWithEndian {
                 primitive: SOMPrimitiveType::empty(),
@@ -641,12 +687,25 @@ mod primitives {
             }
         }
 
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.primitive = self.primitive.with_meta(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.primitive.meta()
+        }
+
         pub fn set(&mut self, value: T) {
             self.primitive.set(value);
         }
 
         pub fn get(&self) -> Option<T> {
             self.primitive.get()
+        }
+
+        pub(crate) fn primitive(&self) -> &SOMPrimitiveType<T> {
+            &self.primitive
         }
     }
 
@@ -678,6 +737,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<bool>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMPrimitiveType<u8> {
@@ -707,6 +770,10 @@ mod primitives {
 
         fn size(&self) -> usize {
             std::mem::size_of::<u8>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -738,6 +805,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<i8>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMPrimitiveTypeWithEndian<u16> {
@@ -767,6 +838,10 @@ mod primitives {
 
         fn size(&self) -> usize {
             std::mem::size_of::<u16>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -798,6 +873,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<i16>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMPrimitiveTypeWithEndian<u24> {
@@ -827,6 +906,10 @@ mod primitives {
 
         fn size(&self) -> usize {
             std::mem::size_of::<u16>() + std::mem::size_of::<u8>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -858,6 +941,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<i16>() + std::mem::size_of::<i8>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMPrimitiveTypeWithEndian<u32> {
@@ -887,6 +974,10 @@ mod primitives {
 
         fn size(&self) -> usize {
             std::mem::size_of::<u32>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -918,6 +1009,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<i32>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMPrimitiveTypeWithEndian<u64> {
@@ -947,6 +1042,10 @@ mod primitives {
 
         fn size(&self) -> usize {
             std::mem::size_of::<u64>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -978,6 +1077,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<i64>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMPrimitiveTypeWithEndian<f32> {
@@ -1007,6 +1110,10 @@ mod primitives {
 
         fn size(&self) -> usize {
             std::mem::size_of::<f32>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -1038,6 +1145,10 @@ mod primitives {
         fn size(&self) -> usize {
             std::mem::size_of::<f64>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
@@ -1055,11 +1166,12 @@ pub type SOMi64 = primitives::SOMPrimitiveTypeWithEndian<i64>;
 pub type SOMf32 = primitives::SOMPrimitiveTypeWithEndian<f32>;
 pub type SOMf64 = primitives::SOMPrimitiveTypeWithEndian<f64>;
 
-mod arrays {
+pub(crate) mod arrays {
     use super::*;
 
     #[derive(Debug, Clone)]
     pub struct SOMArrayType<T: SOMType + Any + Clone> {
+        meta: Option<SOMTypeMeta>,
         lengthfield: SOMLengthField,
         elements: Vec<T>,
         length: usize,
@@ -1070,8 +1182,8 @@ mod arrays {
     impl<T: SOMType + Any + Clone> SOMArrayType<T> {
         pub fn from(lengthfield: SOMLengthField, min: usize, max: usize, elements: Vec<T>) -> Self {
             let size: usize = elements.len();
-
             SOMArrayType {
+                meta: None,
                 lengthfield,
                 elements,
                 length: size,
@@ -1082,6 +1194,7 @@ mod arrays {
 
         pub fn fixed(element: T, size: usize) -> Self {
             SOMArrayType {
+                meta: None,
                 lengthfield: SOMLengthField::None,
                 elements: vec![element; size],
                 length: 0usize,
@@ -1092,12 +1205,22 @@ mod arrays {
 
         pub fn dynamic(lengthfield: SOMLengthField, element: T, min: usize, max: usize) -> Self {
             SOMArrayType {
+                meta: None,
                 lengthfield,
                 elements: vec![element; max],
                 length: 0usize,
                 min,
                 max,
             }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn is_dynamic(&self) -> bool {
@@ -1238,6 +1361,10 @@ mod arrays {
                 SOMTypeCategory::ImplicitLength
             }
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
@@ -1258,17 +1385,30 @@ pub type SOMi64Array = arrays::SOMArrayType<SOMi64>;
 pub type SOMf32Array = arrays::SOMArrayType<SOMf32>;
 pub type SOMf64Array = arrays::SOMArrayType<SOMf64>;
 
-mod structs {
+pub(crate) mod structs {
     use super::*;
 
     #[derive(Debug, Clone)]
     pub struct SOMStructType<T: SOMType> {
+        meta: Option<SOMTypeMeta>,
         members: Vec<T>,
     }
 
     impl<T: SOMType> SOMStructType<T> {
         pub fn from(members: Vec<T>) -> Self {
-            SOMStructType { members }
+            SOMStructType {
+                meta: None,
+                members,
+            }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn len(&self) -> usize {
@@ -1284,7 +1424,7 @@ mod structs {
         }
     }
 
-    impl<T: SOMType> SOMType for SOMStructType<T> {
+    impl<T: SOMType + Any> SOMType for SOMStructType<T> {
         fn serialize(&self, serializer: &mut SOMSerializer) -> Result<usize, SOMTypeError> {
             let offset = serializer.offset();
 
@@ -1318,19 +1458,24 @@ mod structs {
         fn category(&self) -> SOMTypeCategory {
             SOMTypeCategory::ImplicitLength
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
 pub type SOMStructMember = wrapper::SOMTypeWrapper;
 pub type SOMStruct = structs::SOMStructType<SOMStructMember>;
 
-mod unions {
+pub(crate) mod unions {
     use super::*;
 
     const INVALID_TYPE: usize = 0usize;
 
     #[derive(Debug, Clone)]
     pub struct SOMUnionType<T: SOMType + Any> {
+        meta: Option<SOMTypeMeta>,
         typefield: SOMTypeField,
         variants: Vec<T>,
         index: usize,
@@ -1339,10 +1484,20 @@ mod unions {
     impl<T: SOMType + Any> SOMUnionType<T> {
         pub fn from(typefield: SOMTypeField, variants: Vec<T>) -> Self {
             SOMUnionType {
+                meta: None,
                 typefield,
                 variants,
                 index: INVALID_TYPE,
             }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn len(&self) -> usize {
@@ -1431,13 +1586,17 @@ mod unions {
         fn category(&self) -> SOMTypeCategory {
             SOMTypeCategory::ImplicitLength
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
 pub type SOMUnionMember = wrapper::SOMTypeWrapper;
 pub type SOMUnion = unions::SOMUnionType<SOMUnionMember>;
 
-mod enums {
+pub(crate) mod enums {
     use super::*;
 
     #[derive(Debug, Clone)]
@@ -1450,17 +1609,35 @@ mod enums {
         pub fn from(key: String, value: T) -> Self {
             SOMEnumTypeItem { key, value }
         }
+
+        pub(crate) fn get(&self) -> (&str, &T) {
+            (&self.key, &self.value)
+        }
     }
 
     #[derive(Debug, Clone)]
     pub struct SOMEnumType<T> {
+        meta: Option<SOMTypeMeta>,
         variants: Vec<SOMEnumTypeItem<T>>,
         index: usize,
     }
 
-    impl<T: Copy + Clone + PartialEq> SOMEnumType<T> {
+    impl<T: Copy + PartialEq> SOMEnumType<T> {
         pub fn from(variants: Vec<SOMEnumTypeItem<T>>) -> Self {
-            SOMEnumType { variants, index: 0 }
+            SOMEnumType {
+                meta: None,
+                variants,
+                index: 0,
+            }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn len(&self) -> usize {
@@ -1472,9 +1649,17 @@ mod enums {
         }
 
         pub fn get(&self) -> Option<T> {
+            if let Some(variant) = self.value() {
+                return Some(variant.value);
+            }
+
+            None
+        }
+
+        pub(crate) fn value(&self) -> Option<&SOMEnumTypeItem<T>> {
             if self.has_value() {
                 if let Some(variant) = self.variants.get(self.index - 1) {
-                    return Some(variant.value);
+                    return Some(variant);
                 }
             }
 
@@ -1518,12 +1703,21 @@ mod enums {
         endian: SOMEndian,
     }
 
-    impl<T: Copy + Clone + PartialEq> SOMEnumTypeWithEndian<T> {
+    impl<T: Copy + PartialEq> SOMEnumTypeWithEndian<T> {
         pub fn from(endian: SOMEndian, variants: Vec<SOMEnumTypeItem<T>>) -> Self {
             SOMEnumTypeWithEndian {
                 enumeration: SOMEnumType::from(variants),
                 endian,
             }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.enumeration = self.enumeration.with_meta(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.enumeration.meta()
         }
 
         pub fn len(&self) -> usize {
@@ -1544,6 +1738,10 @@ mod enums {
 
         pub fn clear(&mut self) {
             self.enumeration.clear()
+        }
+
+        pub(crate) fn enumeration(&self) -> &SOMEnumType<T> {
+            &self.enumeration
         }
     }
 
@@ -1593,6 +1791,10 @@ mod enums {
         fn size(&self) -> usize {
             std::mem::size_of::<u8>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMEnumTypeWithEndian<u16> {
@@ -1640,6 +1842,10 @@ mod enums {
 
         fn size(&self) -> usize {
             std::mem::size_of::<u16>()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
         }
     }
 
@@ -1689,6 +1895,10 @@ mod enums {
         fn size(&self) -> usize {
             std::mem::size_of::<u32>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 
     impl SOMType for SOMEnumTypeWithEndian<u64> {
@@ -1737,6 +1947,10 @@ mod enums {
         fn size(&self) -> usize {
             std::mem::size_of::<u64>()
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
@@ -1746,7 +1960,7 @@ pub type SOMu16Enum = enums::SOMEnumTypeWithEndian<u16>;
 pub type SOMu32Enum = enums::SOMEnumTypeWithEndian<u32>;
 pub type SOMu64Enum = enums::SOMEnumTypeWithEndian<u64>;
 
-mod strings {
+pub(crate) mod strings {
     use super::*;
 
     const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
@@ -1819,6 +2033,7 @@ mod strings {
 
     #[derive(Debug, Clone)]
     pub struct SOMStringType {
+        meta: Option<SOMTypeMeta>,
         lengthfield: SOMLengthField,
         encoding: SOMStringEncoding,
         format: SOMStringFormat,
@@ -1837,6 +2052,7 @@ mod strings {
             value: String,
         ) -> Self {
             SOMStringType {
+                meta: None,
                 lengthfield,
                 encoding,
                 format,
@@ -1848,6 +2064,7 @@ mod strings {
 
         pub fn fixed(encoding: SOMStringEncoding, format: SOMStringFormat, max: usize) -> Self {
             SOMStringType {
+                meta: None,
                 lengthfield: SOMLengthField::None,
                 encoding,
                 format,
@@ -1865,6 +2082,7 @@ mod strings {
             max: usize,
         ) -> Self {
             SOMStringType {
+                meta: None,
                 lengthfield,
                 encoding,
                 format,
@@ -1872,6 +2090,15 @@ mod strings {
                 min,
                 max,
             }
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn len(&self) -> usize {
@@ -2121,6 +2348,10 @@ mod strings {
                 SOMTypeCategory::ImplicitLength
             }
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
@@ -2128,7 +2359,7 @@ pub type SOMStringEncoding = strings::SOMStringEncoding;
 pub type SOMStringFormat = strings::SOMStringFormat;
 pub type SOMString = strings::SOMStringType;
 
-mod optionals {
+pub(crate) mod optionals {
     use super::*;
 
     const TAG_MASK: u16 = 0x7FFF;
@@ -2180,6 +2411,14 @@ mod optionals {
             None
         }
 
+        pub(crate) fn is_set(&self) -> bool {
+            self.set
+        }
+
+        pub(crate) fn get(&self) -> (usize, &T) {
+            (self.key, &self.value)
+        }
+
         fn tag(&self) -> u16 {
             TAG_MASK & (((self.wiretype as u16) << 12) | ((self.key as u16) & 0x0FFF))
         }
@@ -2187,6 +2426,7 @@ mod optionals {
 
     #[derive(Debug, Clone)]
     pub struct SOMOptionalType<T: SOMType> {
+        meta: Option<SOMTypeMeta>,
         lengthfield: SOMLengthField,
         members: Vec<SOMOptionalTypeItem<T>>,
     }
@@ -2194,6 +2434,7 @@ mod optionals {
     impl<T: SOMType> SOMOptionalType<T> {
         pub fn from(lengthfield: SOMLengthField, members: Vec<SOMOptionalTypeItem<T>>) -> Self {
             SOMOptionalType {
+                meta: None,
                 lengthfield,
                 members,
             }
@@ -2219,6 +2460,15 @@ mod optionals {
                 "Unsupported TLV-Type {}",
                 key
             )))
+        }
+
+        pub fn with_meta(mut self, meta: SOMTypeMeta) -> Self {
+            self.meta = Some(meta);
+            self
+        }
+
+        pub fn meta(&self) -> Option<&SOMTypeMeta> {
+            self.meta.as_ref()
         }
 
         pub fn len(&self) -> usize {
@@ -2270,6 +2520,10 @@ mod optionals {
             for member in &mut self.members {
                 member.set = false;
             }
+        }
+
+        pub(crate) fn members(&self) -> &Vec<SOMOptionalTypeItem<T>> {
+            &self.members
         }
     }
 
@@ -2395,6 +2649,10 @@ mod optionals {
         fn category(&self) -> SOMTypeCategory {
             SOMTypeCategory::ExplicitLength
         }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
     }
 }
 
@@ -2403,6 +2661,7 @@ pub type SOMOptional = optionals::SOMOptionalType<SOMOptionalMember>;
 
 mod wrapper {
     use super::*;
+    use std::fmt::{Display, Formatter, Result as FmtResult};
 
     macro_rules! som_type_wrapper {
         ([$($value:tt($type:tt),)*]) => {
@@ -2432,6 +2691,23 @@ mod wrapper {
                     match self {
                         $(SOMTypeWrapper::$value(obj) => obj.category(),)*
                     }
+                }
+
+                fn as_any(&self) -> &dyn Any {
+                    self
+                }
+            }
+
+            impl Display for SOMTypeWrapper {
+                fn fmt(&self, f: &mut Formatter) -> FmtResult {
+                    let d;
+
+                    match self {
+                        $(SOMTypeWrapper::$value(obj) => {d = format!("{}", obj)},)*
+
+                    }
+
+                    write!(f, "{}", d)
                 }
             }
         };
@@ -2467,7 +2743,7 @@ mod wrapper {
         ArrayI32(SOMi32Array),
         ArrayU64(SOMu64Array),
         ArrayI64(SOMi64Array),
-        ArrayF23(SOMf32Array),
+        ArrayF32(SOMf32Array),
         ArrayF64(SOMf64Array),
         Struct(SOMStruct),
         Union(SOMUnion),
