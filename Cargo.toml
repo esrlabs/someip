@@ -8,8 +8,13 @@ edition = "2021"
 bytes = "1.0"
 nom = "7.1"
 byteorder = "1"
+regex = "1"
 ux = "0.1"
 thiserror = "1.0"
+quick-xml = "0.22"
+voca_rs = "1.14"
+log = "0.4"
 
 [dev-dependencies]
 hex = "0.4.3"
+stringreader = "0.1.1"

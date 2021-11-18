@@ -296,9 +296,9 @@ pub fn someip_header(input: &[u8]) -> IResult<&[u8], SomeIpHeader> {
     let (payload, return_code) = return_code(input)?;
 
     let payload_length = (length - 8) as usize;
-    if payload.len() != payload_length {
+    if payload_length > payload.len() {
         Err(nom::Err::Incomplete(Needed::new(
-            payload.len() - payload_length,
+            payload_length - payload.len(),
         )))
     } else {
         Ok((
