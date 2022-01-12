@@ -1,3 +1,3 @@
-extern crate nom;
 pub mod parser;
-mod serializer;
+pub mod serializer;
+pub mod types;
