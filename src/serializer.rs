@@ -1,10 +1,10 @@
 use crate::parser::*;
-use bytes::{BufMut, BytesMut};
+use bytes::BufMut;
 
 /// Serialization of a SomeIP header to bytes
 #[allow(dead_code)]
 fn serialize_someip_header(header: &SomeIpHeader) -> Vec<u8> {
-    let mut buf = BytesMut::with_capacity(144);
+    let mut buf = Vec::with_capacity(16);
     buf.put_u16(header.message_id.service_id.into());
     buf.put_u16(header.message_id.method_id.into());
     buf.put_u32(header.length);
@@ -15,7 +15,7 @@ fn serialize_someip_header(header: &SomeIpHeader) -> Vec<u8> {
     buf.put_u8(header.message_type.into());
     buf.put_u8(header.return_code.into());
 
-    buf.to_vec()
+    buf
 }
 
 /// Serialization of a SomeIP message to bytes
@@ -24,7 +24,7 @@ pub fn serialize_someip(package: &SomeIp) -> Vec<u8> {
     match package {
         SomeIp::SomeIpMessage(p) => {
             let mut buf = serialize_someip_header(&p.header);
-            buf.put(p.payload);
+            buf.extend(p.payload);
             buf
         }
         SomeIp::SomeIpMagicCookieClient => {
