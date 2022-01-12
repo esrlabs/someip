@@ -1,4 +1,7 @@
-use crate::parser::*;
+use crate::types::{
+    ClientID, MessageID, MessageType, MethodID, RequestID, ReturnCode, ServiceID, SessionID,
+    SomeIp, SomeIpHeader,
+};
 use bytes::BufMut;
 
 /// Serialization of a SomeIP header to bytes
@@ -69,7 +72,7 @@ pub fn serialize_someip(package: &SomeIp) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{MessageID, MessageType, MethodID, RequestID, ReturnCode, ServiceID};
+    use crate::types::{MessageID, MessageType, MethodID, RequestID, ReturnCode, ServiceID, SomeIpMessage};
 
     #[test]
     fn check_someip_header_serializer() {
