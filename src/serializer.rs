@@ -1,78 +1,112 @@
-use crate::types::{
-    ClientID, MessageID, MessageType, MethodID, RequestID, ReturnCode, ServiceID, SessionID,
-    SomeIp, SomeIpHeader,
-};
-use bytes::BufMut;
+use std::io::{self, Write};
 
-/// Serialization of a SomeIP header to bytes
-#[allow(dead_code)]
-fn serialize_someip_header(header: &SomeIpHeader) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(16);
-    buf.put_u16(header.message_id.service_id.into());
-    buf.put_u16(header.message_id.method_id.into());
-    buf.put_u32(header.length);
-    buf.put_u16(header.request_id.client_id.into());
-    buf.put_u16(header.request_id.session_id.into());
-    buf.put_u8(header.protocol_version);
-    buf.put_u8(header.interface_version);
-    buf.put_u8(header.message_type.into());
-    buf.put_u8(header.return_code.into());
+use byteorder::{BigEndian, WriteBytesExt};
 
-    buf
+use crate::types::{Header, Message, MessageId, MessageType, RequestId, ReturnCode};
+
+/// Header length in bytes PRS_SOMEIP_00030
+const HEADER_LENGTH: usize = 16;
+
+impl Header {
+    /// Serialization of a SomeIP header to bytes
+    pub fn to_vec(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(HEADER_LENGTH);
+        self.to_writer(&mut buf).unwrap(); // Safe because it is a Vec
+        buf
+    }
+
+    /// Serialization of a SomeIP header to `writer`
+    pub fn to_writer<W: Write>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        writer.write_u16::<BigEndian>(self.message_id.service_id)?;
+        writer.write_u16::<BigEndian>(self.message_id.method_id)?;
+        writer.write_u32::<BigEndian>(self.length)?;
+        writer.write_u16::<BigEndian>(self.request_id.client_id)?;
+        writer.write_u16::<BigEndian>(self.request_id.session_id)?;
+        writer.write_u8(self.protocol_version)?;
+        writer.write_u8(self.interface_version)?;
+        writer.write_u8(self.message_type.into())?;
+        writer.write_u8(self.return_code.into())?;
+        Ok(HEADER_LENGTH)
+    }
+}
+
+/// Serialize a SomeIP header to a vector of bytes
+#[deprecated(note = "use Header::to_vec instead")]
+pub fn serialize_someip_header(header: &Header) -> Vec<u8> {
+    header.to_vec()
+}
+
+impl<'a> Message<'a> {
+    /// Serialize a SomeIP message to a vector of bytes
+    pub fn to_vec(&self) -> Vec<u8> {
+        let len = match self {
+            Message::Message(_, payload) => 8 + payload.len(),
+            Message::MagicCookieClient | Message::MagicCookieServer => 16,
+        };
+        let mut buf = Vec::with_capacity(len);
+        self.to_writer(&mut buf).unwrap(); // Safe because it is a Vec
+        buf
+    }
+
+    /// Serialization of a SomeIP to `writer`
+    pub fn to_writer<W: Write>(&self, writer: &mut W) -> Result<usize, io::Error> {
+        match self {
+            Message::Message(header, payload) => {
+                header.to_writer(writer)?;
+                writer.write_all(payload)?;
+                Ok(16 + payload.len())
+            }
+            Message::MagicCookieClient => {
+                const MAGIC_COOKIE_CLIENT: Header = Header {
+                    message_id: MessageId {
+                        service_id: 0xFFFF,
+                        method_id: 0x0000,
+                    },
+                    length: 8,
+                    request_id: RequestId {
+                        client_id: 0xDEAD,
+                        session_id: 0xBEEF,
+                    },
+                    protocol_version: 0x01,
+                    interface_version: 0x01,
+                    message_type: MessageType::RequestNoReturn,
+                    return_code: ReturnCode::Ok,
+                };
+                MAGIC_COOKIE_CLIENT.to_writer(writer).map(|_| 16)
+            }
+            Message::MagicCookieServer => {
+                const MAGIC_COOKIE: Header = Header {
+                    message_id: MessageId {
+                        service_id: 0xFFFF,
+                        method_id: 0x8000,
+                    },
+                    length: 8,
+                    request_id: RequestId {
+                        client_id: 0xDEAD,
+                        session_id: 0xBEEF,
+                    },
+                    protocol_version: 0x01,
+                    interface_version: 0x01,
+                    message_type: MessageType::Notification,
+                    return_code: ReturnCode::Ok,
+                };
+                MAGIC_COOKIE.to_writer(writer).map(|_| 16)
+            }
+        }
+    }
 }
 
 /// Serialization of a SomeIP message to bytes
+#[deprecated(note = "use SomeIp::to_vec instead")]
 #[allow(dead_code)]
-pub fn serialize_someip(package: &SomeIp) -> Vec<u8> {
-    match package {
-        SomeIp::SomeIpMessage(p) => {
-            let mut buf = serialize_someip_header(&p.header);
-            buf.extend(p.payload);
-            buf
-        }
-        SomeIp::SomeIpMagicCookieClient => {
-            let magic_cookie = SomeIpHeader {
-                message_id: MessageID {
-                    service_id: ServiceID(0xFFFF),
-                    method_id: MethodID(0x0000),
-                },
-                length: 8,
-                request_id: RequestID {
-                    client_id: ClientID(0xDEAD),
-                    session_id: SessionID(0xBEEF),
-                },
-                protocol_version: 0x01,
-                interface_version: 0x01,
-                message_type: MessageType::RequestNoReturn,
-                return_code: ReturnCode::EOk,
-            };
-            serialize_someip_header(&magic_cookie)
-        }
-        SomeIp::SomeIpMagicCookieServer => {
-            let magic_cookie = SomeIpHeader {
-                message_id: MessageID {
-                    service_id: ServiceID(0xFFFF),
-                    method_id: MethodID(0x8000),
-                },
-                length: 8,
-                request_id: RequestID {
-                    client_id: ClientID(0xDEAD),
-                    session_id: SessionID(0xBEEF),
-                },
-                protocol_version: 0x01,
-                interface_version: 0x01,
-                message_type: MessageType::Notification,
-                return_code: ReturnCode::EOk,
-            };
-            serialize_someip_header(&magic_cookie)
-        }
-    }
+pub fn serialize_someip(someip: &Message) -> Vec<u8> {
+    someip.to_vec()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{MessageID, MessageType, MethodID, RequestID, ReturnCode, ServiceID, SomeIpMessage};
+    use crate::types::{Message, MessageId, MessageType, RequestId, ReturnCode};
 
     #[test]
     fn check_someip_header_serializer() {
@@ -93,21 +127,22 @@ mod tests {
         // let payload: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(
             bytes,
-            serialize_someip_header(&SomeIpHeader {
-                message_id: MessageID {
-                    method_id: MethodID(0x0001),
-                    service_id: ServiceID(0x3085),
+            Header {
+                message_id: MessageId {
+                    method_id: 0x0001,
+                    service_id: 0x3085,
                 },
                 length: 8,
-                request_id: RequestID {
-                    client_id: ClientID(0x0000),
-                    session_id: SessionID(0x0000),
+                request_id: RequestId {
+                    client_id: 0x0000,
+                    session_id: 0x0000,
                 },
                 protocol_version: 0x01,
                 interface_version: 0x01,
                 message_type: MessageType::Request,
-                return_code: ReturnCode::EOk,
-            })
+                return_code: ReturnCode::Ok,
+            }
+            .to_vec()
         )
     }
 
@@ -132,24 +167,25 @@ mod tests {
         let payload: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(
             bytes,
-            serialize_someip(&SomeIp::SomeIpMessage(SomeIpMessage {
-                header: SomeIpHeader {
-                    message_id: MessageID {
-                        method_id: MethodID(0x8005),
-                        service_id: ServiceID(0x0103),
+            Message::Message(
+                Header {
+                    message_id: MessageId {
+                        method_id: 0x8005,
+                        service_id: 0x0103,
                     },
                     length: 13,
-                    request_id: RequestID {
-                        client_id: ClientID(0x0000),
-                        session_id: SessionID(0x0000),
+                    request_id: RequestId {
+                        client_id: 0x0000,
+                        session_id: 0x0000,
                     },
                     protocol_version: 0x01,
                     interface_version: 0x01,
                     message_type: MessageType::Notification,
-                    return_code: ReturnCode::EOk,
+                    return_code: ReturnCode::Ok,
                 },
                 payload,
-            }))
+            )
+            .to_vec()
         )
     }
 }
