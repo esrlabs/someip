@@ -1,13 +1,13 @@
 [package]
-name = "someip-parser"
-version = "0.2.0"
+name = "someip-header"
+version = "0.3.0"
 authors = ["ESRLabs"]
 edition = "2021"
 
 [dependencies]
-bytes = "1.0"
-nom = "7.1"
-thiserror = "1.0"
+byteorder = "1"
+thiserror = "1"
 
 [dev-dependencies]
 hex = "0.4.3"
+proptest = "1"
