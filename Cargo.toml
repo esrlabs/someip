@@ -1,5 +1,5 @@
 [package]
-name = "someip-header"
+name = "someip-messages"
 version = "0.3.0"
 authors = ["ESRLabs"]
 edition = "2021"
