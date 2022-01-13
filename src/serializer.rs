@@ -16,7 +16,7 @@ impl Header {
     }
 
     /// Serialization of a SomeIP header to `writer`
-    pub fn to_writer<W: Write>(&self, writer: &mut W) -> Result<usize, io::Error> {
+    pub fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, io::Error> {
         writer.write_u16::<BigEndian>(self.message_id.service_id)?;
         writer.write_u16::<BigEndian>(self.message_id.method_id)?;
         writer.write_u32::<BigEndian>(self.length)?;
@@ -49,10 +49,10 @@ impl<'a> Message<'a> {
     }
 
     /// Serialization of a SomeIP to `writer`
-    pub fn to_writer<W: Write>(&self, writer: &mut W) -> Result<usize, io::Error> {
+    pub fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, io::Error> {
         match self {
             Message::Message(header, payload) => {
-                header.to_writer(writer)?;
+                header.to_writer(&mut writer)?;
                 writer.write_all(payload)?;
                 Ok(16 + payload.len())
             }
