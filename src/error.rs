@@ -14,18 +14,28 @@ pub enum Error {
         /// The minimum size required.
         /// For strings this is in bytes for sequences in elements.
         min: usize,
-        ///The actual size recived.
+        /// The actual size received.
         /// For strings this is in bytes for sequences in elements.
         actual: usize,
     },
-    /// Unknown return code value
-    #[error("Uknown return code: {0}")]
-    UnknownReturnCode(u8),
-    /// Unknown message type value
-    #[error("Uknown message type value: {0}")]
-    UnknownMessageType(u8),
+    /// Invalid return code value
+    #[error("Unknown return code: {0}")]
+    InvalidReturnCode(u8),
+    /// Invalid message type value
+    #[error("Unknown message type value: {0}")]
+    InvalidMessageType(u8),
+    /// Unknown sd entry value
+    #[error("Unknown sd entry value: {0}")]
+    UnknownSdEntry(u8),
+    /// Unknown sd option value
+    #[error("Unknown sd option value: {0}")]
+    UnknownSdOption(u8),
+    /// Invalid ip proto value
+    #[error("Unknown ip proto value: {0}")]
+    InvalidIpProto(u8),
 }
 
+/// Transforms std::io::Error to a Error.
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Error {
         Error::Io(e)
