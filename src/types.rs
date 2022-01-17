@@ -1,15 +1,95 @@
 use crate::Error;
+use derive_builder::Builder;
 
 /// Represents the header of a SomeIP message
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Builder, Clone, Debug, PartialEq)]
+#[builder(pattern = "mutable")]
 pub struct Header {
+    /// Message id
     pub message_id: MessageId,
+    /// Message length
     pub length: u32,
+    /// Request id
     pub request_id: RequestId,
+    /// Protocol version
+    #[builder(default = "1")]
     pub protocol_version: ProtocolVersion,
+    /// Interface version
     pub interface_version: InterfaceVersion,
+    /// Message type
     pub message_type: MessageType,
+    /// Return code
     pub return_code: ReturnCode,
+}
+
+impl Header {
+    /// Creates a new header with the given message id,
+    /// length, request id, protocol version, interface
+    /// version, message type and return code
+    pub fn new(
+        message_id: MessageId,
+        length: u32,
+        request_id: RequestId,
+        protocol_version: ProtocolVersion,
+        interface_version: InterfaceVersion,
+        message_type: MessageType,
+        return_code: ReturnCode,
+    ) -> Self {
+        Self {
+            message_id,
+            length,
+            request_id,
+            protocol_version,
+            interface_version,
+            message_type,
+            return_code,
+        }
+    }
+
+    /// Get message id
+    pub fn message_id(&self) -> &MessageId {
+        &self.message_id
+    }
+
+    /// Get length
+    pub fn length(&self) -> u32 {
+        self.length
+    }
+
+    /// Get request id
+    pub fn request_id(&self) -> &RequestId {
+        &self.request_id
+    }
+
+    /// Get protocol version
+    pub fn client_id(&self) -> ClientId {
+        self.request_id.client_id()
+    }
+
+    /// Get interface version
+    pub fn session_id(&self) -> SessionId {
+        self.request_id.session_id()
+    }
+
+    /// Get protocol version
+    pub fn protocol_version(&self) -> ProtocolVersion {
+        self.protocol_version
+    }
+
+    /// Get interface version
+    pub fn interface_version(&self) -> InterfaceVersion {
+        self.interface_version
+    }
+
+    /// Get message type
+    pub fn message_type(&self) -> MessageType {
+        self.message_type
+    }
+
+    /// Get return code
+    pub fn return_code(&self) -> ReturnCode {
+        self.return_code
+    }
 }
 
 /// Different types of supported SomeIP messages
@@ -28,8 +108,38 @@ pub enum Message<'a> {
 /// Represents the MessageID within the SomeIP header.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MessageId {
+    /// Service id
     pub service_id: ServiceId,
+    /// Method id
     pub method_id: MethodId,
+}
+
+impl MessageId {
+    /// Construct a new MessageId
+    pub fn new(service_id: ServiceId, method_id: MethodId) -> Self {
+        Self {
+            service_id,
+            method_id,
+        }
+    }
+}
+
+impl From<(ServiceId, MethodId)> for MessageId {
+    fn from(value: (ServiceId, MethodId)) -> Self {
+        Self {
+            service_id: value.0,
+            method_id: value.1,
+        }
+    }
+}
+
+impl From<u32> for MessageId {
+    fn from(value: u32) -> Self {
+        Self {
+            service_id: (value >> 16) as u16,
+            method_id: (value & 0xFFFF) as u16,
+        }
+    }
 }
 
 /// Represents the MethodID within the MessageID
@@ -41,8 +151,48 @@ pub type ServiceId = u16;
 /// Represents the RequestID within the SomeIP header
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RequestId {
+    /// Client id
     pub client_id: ClientId,
+    /// Session id
     pub session_id: SessionId,
+}
+
+impl RequestId {
+    /// Construct a new RequestId
+    pub fn new(client_id: ClientId, session_id: SessionId) -> Self {
+        Self {
+            client_id,
+            session_id,
+        }
+    }
+
+    /// Get client id
+    pub fn client_id(&self) -> ClientId {
+        self.client_id
+    }
+
+    /// Get session id
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+}
+
+impl From<(ClientId, SessionId)> for RequestId {
+    fn from(value: (ClientId, SessionId)) -> Self {
+        Self {
+            client_id: value.0,
+            session_id: value.1,
+        }
+    }
+}
+
+impl From<u32> for RequestId {
+    fn from(value: u32) -> Self {
+        Self {
+            client_id: (value >> 16) as u16,
+            session_id: (value & 0xFFFF) as u16,
+        }
+    }
 }
 
 /// Protocol version
@@ -60,15 +210,25 @@ pub type SessionId = u16;
 /// Different kinds of MessagesTypes accepted in a SomeIP header
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MessageType {
+    /// Request
     Request,
+    /// Rquest no return
     RequestNoReturn,
+    /// Notification
     Notification,
+    /// Repsonse
     Response,
+    /// Error
     Error,
+    /// Tp request
     TpRequest,
+    /// Tp request no return
     TpRequestNoReturn,
+    /// Tp notification
     TpNotification,
+    /// Tp response
     TpResponse,
+    /// Tp error
     TpError,
 }
 
@@ -106,13 +266,21 @@ pub enum ReturnCode {
 
 /// Different kinds of EntriesTyp accepted in a SomeIP header
 pub enum EntriesType {
+    /// Find service
     FindService,
+    /// Offer service
     OfferService,
+    /// Request service
     RequestService,
+    /// Request service ack
     RequestServiceACK,
+    /// Find event group
     FindEventgroup,
+    /// Publish event group
     PublishEventgroup,
+    /// Subscribe event group
     SubscribeEventgroup,
+    /// Subscribe event group ack
     SubscribeEventgroupACK,
 }
 
@@ -237,5 +405,19 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn header_builder_smoke() {
+        super::HeaderBuilder::default()
+            .message_id(MessageId::new(0x1234, 0x1234))
+            .length(0x1234)
+            .request_id(RequestId::new(0x1234, 0x1234))
+            .protocol_version(1)
+            .interface_version(1)
+            .message_type(MessageType::Request)
+            .return_code(ReturnCode::NotOk)
+            .build()
+            .unwrap();
     }
 }
