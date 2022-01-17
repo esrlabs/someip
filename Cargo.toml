@@ -6,6 +6,7 @@ edition = "2021"
 
 [dependencies]
 byteorder = "1"
+derive_builder = "0.10.2"
 thiserror = "1"
 
 [dev-dependencies]
