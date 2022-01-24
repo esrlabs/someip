@@ -426,24 +426,18 @@ pub struct SdPayload {
 
 impl SdPayload {
     /// Length of the payload in bytes
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         12 + self.entries_len() + self.options_len()
     }
 
     /// Length of the payload's entries in bytes
-    pub(crate) fn entries_len(&self) -> usize {
+    pub fn entries_len(&self) -> usize {
         SdEntry::LENGTH * self.entries.len()
     }
 
     /// Length of the payload's options in bytes
-    pub(crate) fn options_len(&self) -> usize {
-        let mut len: usize = 0;
-
-        for option in &self.options {
-            len += option.len();
-        }
-
-        len
+    pub fn options_len(&self) -> usize {
+        self.options.iter().map(SdOption::len).sum()
     }
 
     /// Returns true if the reboot flag is set
