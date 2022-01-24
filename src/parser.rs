@@ -80,7 +80,8 @@ impl Header {
         Header::from_reader(&mut buffer)
     }
 
-    fn from_reader<R: Read>(reader: &mut R) -> Result<Header, Error> {
+    /// Parse a header from a `Read`
+    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Header, Error> {
         let service_id = reader.read_u16::<BE>()?;
         let method_id = reader.read_u16::<BE>()?;
         let length = reader.read_u32::<BE>()?;
@@ -110,7 +111,8 @@ impl Header {
 }
 
 impl SdPayload {
-    fn from_reader<R: Read>(reader: &mut R) -> Result<SdPayload, Error> {
+    /// Parse SD payload from a `Read`
+    pub fn from_reader<R: Read>(reader: &mut R) -> Result<SdPayload, Error> {
         let flags = reader.read_u8()?;
         reader.read_u24::<BE>()?; // reserved
 

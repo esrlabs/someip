@@ -17,7 +17,8 @@ impl<'a> Message<'a> {
         buffer
     }
 
-    fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, Error> {
+    /// Serialize the message into a writer.
+    pub fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, Error> {
         match self {
             Message::Rpc(header, payload) => {
                 header.to_writer(&mut writer)?;
@@ -79,7 +80,8 @@ impl Header {
         buffer
     }
 
-    fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, Error> {
+    /// Serialize the header into a writer.
+    pub fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, Error> {
         writer.write_u16::<BigEndian>(self.message_id.service_id)?;
         writer.write_u16::<BigEndian>(self.message_id.method_id)?;
         writer.write_u32::<BigEndian>(self.length)?;
@@ -95,7 +97,8 @@ impl Header {
 }
 
 impl SdPayload {
-    fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, Error> {
+    /// Serializes the payload into a writer.
+    pub fn to_writer<W: Write>(&self, mut writer: W) -> Result<usize, Error> {
         writer.write_u8(self.flags)?;
         writer.write_u24::<BigEndian>(0x000000)?; // reserved
 
