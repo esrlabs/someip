@@ -414,6 +414,7 @@ impl From<ReturnCode> for u8 {
 pub type RpcPayload<'a> = &'a [u8];
 
 #[derive(Debug, PartialEq)]
+#[allow(clippy::len_without_is_empty)]
 /// Represents the SdPayload within a SD message.
 pub struct SdPayload {
     /// Flags

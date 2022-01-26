@@ -218,16 +218,15 @@ impl SdOption {
 
         reader.read_u8()?; // reserved
 
-        let ip: IpAddr;
-        if SdOption::is_ip4_option(option_type) {
+        let ip = if SdOption::is_ip4_option(option_type) {
             let mut buffer = [0u8; 4];
             reader.read_exact(&mut buffer)?;
-            ip = IpAddr::V4(Ipv4Addr::from(buffer));
+            IpAddr::V4(Ipv4Addr::from(buffer))
         } else {
             let mut buffer = [0u8; 16];
             reader.read_exact(&mut buffer)?;
-            ip = IpAddr::V6(Ipv6Addr::from(buffer));
-        }
+            IpAddr::V6(Ipv6Addr::from(buffer))
+        };
 
         reader.read_u8()?; // reserved
         let proto = IpProto::try_from(reader.read_u8()?)?;
