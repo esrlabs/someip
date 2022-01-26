@@ -1,5 +1,6 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![](https://github.com/esrlabs/someip/workflows/CI/badge.svg)](https://github.com/esrlabs/someip/actions)
+[![CI](https://img.shields.io/github/workflow/status/esrlabs/someip/CI)](https://github.com/esrlabs/someip/actions)
+[![Docs](https://img.shields.io/badge/docs-here-green)](https://esrlabs.github.io/someip/someip_messages)
 
 # SOME/IP
 
