@@ -116,10 +116,7 @@ impl SdPayload {
         let flags = reader.read_u8()?;
         reader.read_u24::<BE>()?; // reserved
 
-        let entries_len: usize = match reader.read_u32::<BE>() {
-            Ok(value) => value as usize,
-            Err(_) => 0usize,
-        };
+        let entries_len: usize = reader.read_u32::<BE>()? as usize;
         let num_entries = entries_len / SdEntry::LENGTH;
         let mut entries: Vec<SdEntry> = Vec::with_capacity(num_entries);
 
@@ -127,10 +124,7 @@ impl SdPayload {
             entries.push(SdEntry::from_reader(reader)?);
         }
 
-        let options_len: usize = match reader.read_u32::<BE>() {
-            Ok(value) => value as usize,
-            Err(_) => 0usize,
-        };
+        let options_len: usize = reader.read_u32::<BE>()? as usize;
         let mut options: Vec<SdOption> = Vec::new();
 
         let mut read_len: usize = 0;
