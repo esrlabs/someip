@@ -4,9 +4,10 @@
 
 mod error;
 /// Parse someip messages
-pub mod parser;
+mod parser;
 /// Serialize someip messages
-pub mod serializer;
+mod serializer;
+/// Message types
 mod types;
 
 pub use error::Error;
