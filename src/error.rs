@@ -18,6 +18,9 @@ pub enum Error {
         /// For strings this is in bytes for sequences in elements.
         actual: usize,
     },
+    /// Invalid length field value
+    #[error("Invalid length field: {0}")]
+    InvalidLengthField(u32),
     /// Invalid return code value
     #[error("Unknown return code: {0}")]
     InvalidReturnCode(u8),

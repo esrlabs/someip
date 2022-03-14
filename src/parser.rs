@@ -92,7 +92,7 @@ impl Header {
         let message_type = reader.read_u8()?.try_into()?;
         let return_code = reader.read_u8()?.try_into()?;
 
-        Ok(Header {
+        let header = Header {
             message_id: MessageId {
                 service_id,
                 method_id,
@@ -106,7 +106,13 @@ impl Header {
             interface_version,
             message_type,
             return_code,
-        })
+        };
+
+        if (header.is_sd() && length < 20) || (!header.is_sd() && length < 8) {
+            return Err(Error::InvalidLengthField(length));
+        }
+
+        Ok(header)
     }
 }
 
