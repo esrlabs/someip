@@ -36,6 +36,10 @@ pub enum Error {
     /// Invalid ip proto value
     #[error("Unknown ip proto value: {0}")]
     InvalidIpProto(u8),
+    /// Invalid ip proto value
+    #[cfg(feature = "url")]
+    #[error("Invalid url: {0}")]
+    InvalidUrl(&'static str),
 }
 
 /// Transforms std::io::Error to a Error.

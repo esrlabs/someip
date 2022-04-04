@@ -11,3 +11,7 @@ SOME/IP is an automotive middleware solution that can be used for control messag
 ## Parser
 
 This project implements a pure rust parser for SOME/IP content.
+
+## Features
+
+The feature `url` enables conversion between [someip_messages::SdEndpointOption](https://esrlabs.github.io/someip/someip_messages/struct.SdEndpointOption.html) and [url::Url](https://docs.rs/url/2.2.0/url/struct.Url.html). The `url` feature is disabled by default.

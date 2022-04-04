@@ -282,6 +282,7 @@ pub enum MessageType {
 }
 
 /// Different kinds of EntriesTyp accepted in a SdPayload.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum EntriesType {
     /// Find service
     FindService,
@@ -413,7 +414,7 @@ impl From<ReturnCode> for u8 {
 /// Represents the RpcPayload within a RPC message.
 pub type RpcPayload<'a> = &'a [u8];
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[allow(clippy::len_without_is_empty)]
 /// Represents the SdPayload within a SD message.
 pub struct SdPayload {
@@ -492,7 +493,7 @@ pub type SdFlags = u8;
 pub type Ttl = u32;
 
 /// Different kinds of SdEntry accepted in a SdPayload.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SdEntry {
     /// Find service entry
     FindService(SdServiceEntry),
@@ -561,7 +562,7 @@ impl TryFrom<(u8, SdEventgroupEntry)> for SdEntry {
 }
 
 /// Represents a SdServiceEntry within a SdPayload.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SdServiceEntry {
     /// Service id
     pub service_id: ServiceId,
@@ -585,7 +586,7 @@ impl SdServiceEntry {
 }
 
 /// Represents a SdEventgroupEntry within a SdPayload.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SdEventgroupEntry {
     /// Service id
     pub service_id: ServiceId,
@@ -621,7 +622,7 @@ pub type MajorVersion = u8;
 pub type MinorVersion = u32;
 
 /// Represents the referenced options of a SdEntry.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SdOptionRef {
     /// Index start of first options set
     pub index1: u8,
@@ -634,7 +635,7 @@ pub struct SdOptionRef {
 }
 
 /// Different kinds of SdOption accepted in a SdPayload.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SdOption {
     /// Ip4 unicast endpoint option
     Ip4Unicast(SdEndpointOption),
@@ -705,7 +706,7 @@ impl From<&SdOption> for u8 {
 }
 
 /// Represents a SdEndpointOption within a SdPayload.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SdEndpointOption {
     /// IP Address
     pub ip: IpAddr,
@@ -716,7 +717,7 @@ pub struct SdEndpointOption {
 }
 
 /// Different kinds of IpProto accepted in a SdEndpointOption.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IpProto {
     /// User Datagram Protocol (UDP)
     UDP,
@@ -748,9 +749,62 @@ impl From<IpProto> for u8 {
     }
 }
 
+#[cfg(feature = "url")]
+impl From<SdEndpointOption> for url::Url {
+    fn from(option: SdEndpointOption) -> url::Url {
+        let port = option.port;
+        let scheme = match option.proto {
+            IpProto::UDP => "udp",
+            IpProto::TCP => "tcp",
+        };
+        let url = match option.ip {
+            IpAddr::V4(ip) => {
+                format!("{}://{}:{}", scheme, ip, port)
+            }
+            IpAddr::V6(ip) => {
+                format!("{}://[{}]:{}", scheme, ip, port)
+            }
+        };
+
+        url::Url::parse(&url).unwrap() // safe - url constructed from known values
+    }
+}
+
+#[cfg(feature = "url")]
+impl TryFrom<url::Url> for SdEndpointOption {
+    type Error = Error;
+
+    fn try_from(url: url::Url) -> Result<Self, Self::Error> {
+        let ip: IpAddr = url
+            .host()
+            .ok_or(Error::InvalidUrl("invalid URL: missing host"))
+            .and_then(|host| match host {
+                url::Host::Domain(domain) => domain
+                    .parse::<IpAddr>()
+                    .map_err(|_| Error::InvalidUrl("invalid URL: host not an ip")),
+                url::Host::Ipv4(ip) => Ok(ip.into()),
+                url::Host::Ipv6(ip) => Ok(ip.into()),
+            })?;
+
+        let port = url
+            .port()
+            .ok_or(Error::InvalidUrl("invalid URL: missing port"))?;
+
+        let proto = match url.scheme() {
+            "tcp" => Ok(IpProto::TCP),
+            "udp" => Ok(IpProto::UDP),
+            _ => Err(Error::InvalidUrl("invalid URL: invalid scheme")),
+        }?;
+
+        Ok(SdEndpointOption { ip, port, proto })
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    #[cfg(feature = "url")]
+    use std::net::Ipv6Addr;
     use std::net::{IpAddr, Ipv4Addr};
     use std::str::FromStr;
 
@@ -879,5 +933,29 @@ mod test {
         assert_eq!(2, options.len());
         assert_eq!(30002, options.get(0).unwrap().port);
         assert_eq!(30003, options.get(1).unwrap().port);
+    }
+
+    #[cfg(feature = "url")]
+    #[test]
+    fn endpoint_url_v4() {
+        let option = SdEndpointOption {
+            ip: Ipv4Addr::LOCALHOST.into(),
+            port: 1234,
+            proto: IpProto::TCP,
+        };
+        let url: url::Url = option.clone().into();
+        assert_eq!(option, url.try_into().unwrap());
+    }
+
+    #[cfg(feature = "url")]
+    #[test]
+    fn endpoint_url_v6() {
+        let option = SdEndpointOption {
+            ip: Ipv6Addr::LOCALHOST.into(),
+            port: 5555,
+            proto: IpProto::UDP,
+        };
+        let url: url::Url = option.clone().into();
+        assert_eq!(option, url.try_into().unwrap());
     }
 }
