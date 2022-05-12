@@ -151,7 +151,7 @@ impl Length for Header {
 }
 
 /// Represents the MessageId within the header.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct MessageId {
     /// Service id
     pub service_id: ServiceId,
@@ -196,7 +196,7 @@ pub type ServiceId = u16;
 pub type MethodId = u16;
 
 /// Represents the RequestId within the header.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct RequestId {
     /// Client id
     pub client_id: ClientId,
@@ -257,7 +257,7 @@ pub type ProtocolVersion = u8;
 pub type InterfaceVersion = u8;
 
 /// Different kinds of MessageType accepted in a header.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum MessageType {
     /// Request
     Request,
@@ -282,7 +282,7 @@ pub enum MessageType {
 }
 
 /// Different kinds of EntriesTyp accepted in a SdPayload.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum EntriesType {
     /// Find service
     FindService,
@@ -335,7 +335,7 @@ impl From<MessageType> for u8 {
 }
 
 /// Different kinds of ReturnCode accepted in a header.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub enum ReturnCode {
     /// No error occurred
     Ok,
