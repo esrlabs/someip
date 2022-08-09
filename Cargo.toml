@@ -12,7 +12,7 @@ url = { version ="2.2.2", optional = true }
 
 [dev-dependencies]
 hex = "0.4.3"
-proptest = "1"
+proptest = { version = "1", default_features = false, features = ["std"] }
 
 [features]
 default = []
