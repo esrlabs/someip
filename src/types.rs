@@ -10,7 +10,7 @@ pub trait Length {
 }
 
 /// Different kinds of SOME/IP messages.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Message<'a> {
     /// RPC Message
     Rpc(Header, RpcPayload<'a>),
@@ -25,7 +25,7 @@ pub enum Message<'a> {
 }
 
 /// Represents the header of a SOME/IP message.
-#[derive(Builder, Clone, Debug, PartialEq)]
+#[derive(Builder, Clone, Debug, Eq, PartialEq)]
 #[builder(pattern = "mutable")]
 pub struct Header {
     /// Message id
