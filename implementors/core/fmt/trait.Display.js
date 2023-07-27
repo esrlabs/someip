@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"someip_messages":[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.71.0/core/fmt/trait.Display.html\" title=\"trait core::fmt::Display\">Display</a> for <a class=\"enum\" href=\"someip_messages/enum.Error.html\" title=\"enum someip_messages::Error\">Error</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.71.0/core/fmt/trait.Display.html\" title=\"trait core::fmt::Display\">Display</a> for <a class=\"enum\" href=\"someip_messages/enum.HeaderBuilderError.html\" title=\"enum someip_messages::HeaderBuilderError\">HeaderBuilderError</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
