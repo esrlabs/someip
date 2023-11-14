@@ -750,8 +750,10 @@ impl From<IpProto> for u8 {
 }
 
 #[cfg(feature = "url")]
-impl From<SdEndpointOption> for url::Url {
-    fn from(option: SdEndpointOption) -> url::Url {
+impl TryFrom<SdEndpointOption> for url::Url {
+    type Error = Error;
+
+    fn try_from(option: SdEndpointOption) -> Result<url::Url, Self::Error> {
         let port = option.port;
         let scheme = match option.proto {
             IpProto::UDP => "udp",
@@ -766,7 +768,7 @@ impl From<SdEndpointOption> for url::Url {
             }
         };
 
-        url::Url::parse(&url).unwrap() // safe - url constructed from known values
+        url::Url::parse(&url).map_err(|_| Error::InvalidUrl("invalid url"))
     }
 }
 
@@ -943,7 +945,7 @@ mod test {
             port: 1234,
             proto: IpProto::TCP,
         };
-        let url: url::Url = option.clone().into();
+        let url: url::Url = option.clone().try_into().unwrap();
         assert_eq!(option, url.try_into().unwrap());
     }
 
@@ -955,7 +957,7 @@ mod test {
             port: 5555,
             proto: IpProto::UDP,
         };
-        let url: url::Url = option.clone().into();
+        let url: url::Url = option.clone().try_into().unwrap();
         assert_eq!(option, url.try_into().unwrap());
     }
 }
