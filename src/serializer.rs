@@ -178,10 +178,8 @@ impl SdOption {
         let option_len = self.len();
 
         match self {
-            SdOption::Ip4Unicast(item) => item.to_writer(option_type, option_len, &mut writer),
-            SdOption::Ip4Multicast(item) => item.to_writer(option_type, option_len, &mut writer),
-            SdOption::Ip6Unicast(item) => item.to_writer(option_type, option_len, &mut writer),
-            SdOption::Ip6Multicast(item) => item.to_writer(option_type, option_len, &mut writer),
+            SdOption::IpUnicast(item) => item.to_writer(option_type, option_len, &mut writer),
+            SdOption::IpMulticast(item) => item.to_writer(option_type, option_len, &mut writer),
         }
     }
 }
@@ -488,12 +486,12 @@ mod tests {
                         },
                     })],
                     options: vec![
-                        SdOption::Ip4Unicast(SdEndpointOption {
+                        SdOption::IpUnicast(SdEndpointOption {
                             ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                             port: 30000,
                             proto: IpProto::UDP,
                         }),
-                        SdOption::Ip6Unicast(SdEndpointOption {
+                        SdOption::IpUnicast(SdEndpointOption {
                             ip: IpAddr::V6(
                                 Ipv6Addr::from_str("FF0E:0000:0000:0000:0000:FFFF:EFC0:FFFB")
                                     .unwrap()
@@ -587,7 +585,7 @@ mod tests {
                             },
                         })
                     ],
-                    options: vec![SdOption::Ip4Unicast(SdEndpointOption {
+                    options: vec![SdOption::IpUnicast(SdEndpointOption {
                         ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                         port: 30000,
                         proto: IpProto::UDP,

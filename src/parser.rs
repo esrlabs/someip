@@ -505,12 +505,12 @@ mod test {
                         },
                     })],
                     options: vec![
-                        SdOption::Ip4Unicast(SdEndpointOption {
+                        SdOption::IpUnicast(SdEndpointOption {
                             ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                             port: 30000,
                             proto: IpProto::UDP,
                         }),
-                        SdOption::Ip6Unicast(SdEndpointOption {
+                        SdOption::IpUnicast(SdEndpointOption {
                             ip: IpAddr::V6(
                                 Ipv6Addr::from_str("FF0E:0000:0000:0000:0000:FFFF:EFC0:FFFB")
                                     .unwrap()
@@ -606,7 +606,7 @@ mod test {
                             },
                         })
                     ],
-                    options: vec![SdOption::Ip4Unicast(SdEndpointOption {
+                    options: vec![SdOption::IpUnicast(SdEndpointOption {
                         ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                         port: 30000,
                         proto: IpProto::UDP,
