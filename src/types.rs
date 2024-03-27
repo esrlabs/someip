@@ -473,10 +473,8 @@ impl SdPayload {
             for i in 0..refs.1 {
                 if let Some(item) = self.options.get(refs.0 as usize + i as usize) {
                     options.push(match item {
-                        SdOption::Ip4Unicast(value) => value,
-                        SdOption::Ip4Multicast(value) => value,
-                        SdOption::Ip6Unicast(value) => value,
-                        SdOption::Ip6Multicast(value) => value,
+                        SdOption::IpUnicast(value) => value,
+                        SdOption::IpMulticast(value) => value,
                     });
                 }
             }
@@ -637,14 +635,10 @@ pub struct SdOptionRef {
 /// Different kinds of SdOption accepted in a SdPayload.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SdOption {
-    /// Ip4 unicast endpoint option
-    Ip4Unicast(SdEndpointOption),
-    /// Ip4 multicast endpoint option
-    Ip4Multicast(SdEndpointOption),
-    /// Ip6 unicast endpoint option
-    Ip6Unicast(SdEndpointOption),
-    /// Ip6 multicast endpoint option
-    Ip6Multicast(SdEndpointOption),
+    /// IP unicast endpoint option
+    IpUnicast(SdEndpointOption),
+    /// IP multicast endpoint option
+    IpMulticast(SdEndpointOption),
 }
 
 impl SdOption {
@@ -671,23 +665,34 @@ impl SdOption {
     /// Construct a new SD option from type and endpoint
     pub fn from(option_type: u8, option: SdEndpointOption) -> Result<Self, Error> {
         use SdOption::*;
-        match option_type {
-            0x04 => Ok(Ip4Unicast(option)),
-            0x14 => Ok(Ip4Multicast(option)),
-            0x06 => Ok(Ip6Unicast(option)),
-            0x16 => Ok(Ip6Multicast(option)),
-            option_type => Err(Error::UnknownSdOption(option_type)),
+        match (option_type, &option.ip) {
+            // Correct pairings
+            (0x04, IpAddr::V4(_)) => Ok(IpUnicast(option)),
+            (0x14, IpAddr::V4(_)) => Ok(IpMulticast(option)),
+            (0x06, IpAddr::V6(_)) => Ok(IpUnicast(option)),
+            (0x16, IpAddr::V6(_)) => Ok(IpMulticast(option)),
+            // Incorrect pairings
+            (0x04, IpAddr::V6(_)) | (0x14, IpAddr::V6(_)) => {
+                Err(Error::SdOptionTypeIpMismatch(4, 6))
+            }
+            (0x06, IpAddr::V4(_)) | (0x16, IpAddr::V4(_)) => {
+                Err(Error::SdOptionTypeIpMismatch(6, 4))
+            }
+            (option_type, _) => Err(Error::UnknownSdOption(option_type)),
         }
     }
 
     /// Length of the option in bytes
     pub(crate) fn len(&self) -> usize {
         use SdOption::*;
-        match self {
-            Ip4Unicast(_) => 12,
-            Ip4Multicast(_) => 12,
-            Ip6Unicast(_) => 24,
-            Ip6Multicast(_) => 24,
+        let endpoint = match self {
+            IpUnicast(inner) => inner,
+            IpMulticast(inner) => inner,
+        };
+
+        match &endpoint.ip {
+            IpAddr::V4(_) => 12,
+            IpAddr::V6(_) => 24,
         }
     }
 }
@@ -697,10 +702,14 @@ impl From<&SdOption> for u8 {
     fn from(option: &SdOption) -> Self {
         use SdOption::*;
         match option {
-            Ip4Unicast(_) => 0x04,
-            Ip4Multicast(_) => 0x14,
-            Ip6Unicast(_) => 0x06,
-            Ip6Multicast(_) => 0x16,
+            IpUnicast(endpoint) => match endpoint.ip {
+                IpAddr::V4(_) => 0x04,
+                IpAddr::V6(_) => 0x06,
+            },
+            IpMulticast(endpoint) => match endpoint.ip {
+                IpAddr::V4(_) => 0x14,
+                IpAddr::V6(_) => 0x16,
+            },
         }
     }
 }
@@ -805,9 +814,7 @@ impl TryFrom<url::Url> for SdEndpointOption {
 #[cfg(test)]
 mod test {
     use super::*;
-    #[cfg(feature = "url")]
-    use std::net::Ipv6Addr;
-    use std::net::{IpAddr, Ipv4Addr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
     #[cfg(test)]
@@ -900,22 +907,22 @@ mod test {
                 }),
             ],
             options: vec![
-                SdOption::Ip4Unicast(SdEndpointOption {
+                SdOption::IpUnicast(SdEndpointOption {
                     ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                     port: 30000,
                     proto: IpProto::UDP,
                 }),
-                SdOption::Ip4Unicast(SdEndpointOption {
+                SdOption::IpUnicast(SdEndpointOption {
                     ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                     port: 30001,
                     proto: IpProto::UDP,
                 }),
-                SdOption::Ip4Unicast(SdEndpointOption {
+                SdOption::IpUnicast(SdEndpointOption {
                     ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                     port: 30002,
                     proto: IpProto::UDP,
                 }),
-                SdOption::Ip4Unicast(SdEndpointOption {
+                SdOption::IpUnicast(SdEndpointOption {
                     ip: IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap()),
                     port: 30003,
                     proto: IpProto::UDP,
@@ -935,6 +942,32 @@ mod test {
         assert_eq!(2, options.len());
         assert_eq!(30002, options.get(0).unwrap().port);
         assert_eq!(30003, options.get(1).unwrap().port);
+    }
+
+    #[test]
+    fn sd_option_variants() {
+        let ipv4 = IpAddr::V4(Ipv4Addr::from_str("127.0.0.1").unwrap());
+        let ipv6 = IpAddr::V6(Ipv6Addr::from_str("fe80::1").unwrap());
+
+        fn sd_endpoint_opt(ip: IpAddr) -> SdEndpointOption {
+            SdEndpointOption {
+                ip,
+                port: 30000,
+                proto: IpProto::UDP,
+            }
+        }
+
+        let invalid_pairs = [(0x04, ipv6), (0x14, ipv6), (0x06, ipv4), (0x16, ipv4)];
+        for (option_type, ip) in invalid_pairs {
+            let option = sd_endpoint_opt(ip);
+            assert!(SdOption::from(option_type, option).is_err());
+        }
+
+        let valid_pairs = [(0x04, ipv4), (0x14, ipv4), (0x06, ipv6), (0x16, ipv6)];
+        for (option_type, ip) in valid_pairs {
+            let option = sd_endpoint_opt(ip);
+            assert!(SdOption::from(option_type, option).is_ok());
+        }
     }
 
     #[cfg(feature = "url")]
