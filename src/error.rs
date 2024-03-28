@@ -36,6 +36,9 @@ pub enum Error {
     /// Invalid ip proto value
     #[error("Unknown ip proto value: {0}")]
     InvalidIpProto(u8),
+    /// Mismatch between requested sd option type and ip proto version
+    #[error("Mismatch between sd option type {0} and ip proto version {1}")]
+    SdOptionTypeIpMismatch(u8, u8),
     /// Invalid ip proto value
     #[cfg(feature = "url")]
     #[error("Invalid url: {0}")]
