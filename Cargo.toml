@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies]
 byteorder = "1"
 derive_builder = "0.20.0"
-thiserror = "1"
+thiserror = "2"
 url = { version ="2.2.2", optional = true }
 
 [dev-dependencies]
